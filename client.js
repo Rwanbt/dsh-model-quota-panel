@@ -24,6 +24,88 @@ window.__ModuleLoader__.load({
     const STYLE_ID = 'model-quota-panel-styles';
     const PANEL_WIDTH = 264;
     const RADIUS = 5.5;
+
+    /* ── locale, translation and money ──────────────────────────────── */
+
+    const SUPPORTED_LOCALES = ['en', 'fr', 'es', 'de', 'zh'];
+    const REGION_CURRENCY = {
+      US: 'USD', GB: 'GBP', CH: 'CHF', CA: 'CAD', JP: 'JPY', CN: 'CNY',
+      AU: 'AUD', IN: 'INR', BR: 'BRL',
+      DE: 'EUR', FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', BE: 'EUR',
+      PT: 'EUR', AT: 'EUR', IE: 'EUR', FI: 'EUR', GR: 'EUR',
+    };
+    const FALLBACK_MESSAGES = {
+      'panel.title': 'Subscription quota',
+      'panel.sessionCost': 'Session cost',
+      'panel.estimate': 'estimate',
+      'panel.used': 'used',
+      'panel.noData': 'No quota data available',
+      'panel.unavailable': 'Quota data unavailable',
+    };
+
+    const USER_LOCALE = (() => {
+      try {
+        const requested = (globalThis.navigator && globalThis.navigator.language) || 'en';
+        const primary = String(requested).toLowerCase().split(/[-_]/)[0];
+        return SUPPORTED_LOCALES.includes(primary) ? primary : 'en';
+      } catch (error) {
+        return 'en';
+      }
+    })();
+
+    /** Translate a key with the dictionaries the Host published. */
+    function translate(data, key, params) {
+      const messages = data && data.messages;
+      const template =
+        (messages && messages[USER_LOCALE] && messages[USER_LOCALE][key]) ||
+        (messages && messages.en && messages.en[key]) ||
+        FALLBACK_MESSAGES[key] ||
+        key;
+      if (!params) return template;
+      return template.replace(/\{(\w+)\}/g, (match, name) =>
+        Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match,
+      );
+    }
+
+    /** Local currency implied by the browser locale. */
+    function displayCurrency() {
+      try {
+        const tag = (globalThis.navigator && globalThis.navigator.language) || 'en-US';
+        const region = String(tag).split(/[-_]/)[1];
+        if (region && REGION_CURRENCY[region.toUpperCase()]) return REGION_CURRENCY[region.toUpperCase()];
+      } catch (error) {
+        // fall through
+      }
+      return 'USD';
+    }
+
+    /** Format a USD amount in the user's currency and locale. */
+    function money(usd, data) {
+      const currency = displayCurrency();
+      const rates = data && data.fx && data.fx.rates;
+      const rate = currency === 'USD' ? 1 : rates && typeof rates[currency] === 'number' ? rates[currency] : 1;
+      const amount = (Number.isFinite(usd) ? usd : 0) * rate;
+      const digits = amount !== 0 && Math.abs(amount) < 1 ? 4 : 2;
+      try {
+        return new Intl.NumberFormat(USER_LOCALE, {
+          style: 'currency',
+          currency,
+          minimumFractionDigits: Math.min(2, digits),
+          maximumFractionDigits: digits,
+        }).format(amount);
+      } catch (error) {
+        return amount.toFixed(digits) + ' ' + currency;
+      }
+    }
+
+    /** Window label from its semantic key, falling back to the Host label. */
+    function windowText(data, window) {
+      if (window && typeof window.key === 'string') {
+        const translated = translate(data, 'window.' + window.key, window.params);
+        if (translated !== 'window.' + window.key) return translated;
+      }
+      return (window && window.label) || '';
+    }
     const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
     /**
      * Absolute path of the snapshot published by the Host (index.js). The Host
@@ -215,11 +297,11 @@ window.__ModuleLoader__.load({
     }
 
     /** Tooltip text telling when a kept-over reading was taken. */
-    function staleTitle(provider) {
+    function staleTitle(provider, data) {
       if (!provider || provider.stale !== true || !provider.updatedAt) return undefined;
       const at = new Date(provider.updatedAt);
       if (Number.isNaN(at.getTime())) return undefined;
-      return 'Valeurs relevées à ' + at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      return translate(data, 'panel.stale', { time: at.toLocaleTimeString(USER_LOCALE, { hour: '2-digit', minute: '2-digit' }) });
     }
 
     function worstPercent(provider) {
@@ -300,15 +382,20 @@ window.__ModuleLoader__.load({
       if (Number.isNaN(at.getTime())) return null;
       const totalMinutes = Math.round((at.getTime() - Date.now()) / 60000);
       const clock = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-      if (totalMinutes <= 0) return { short: 'réinitialisé', full: `réinitialisation effectuée à ${clock}` };
+      if (totalMinutes <= 0) return { shortKey: 'reset.done', shortParams: { time: clock }, fullKey: 'reset.done', fullParams: { time: clock } };
       const days = Math.floor(totalMinutes / 1440);
       const hours = Math.floor((totalMinutes % 1440) / 60);
       const minutes = totalMinutes % 60;
-      let short;
-      if (days > 0) short = `${days} j ${hours} h`;
-      else if (hours > 0) short = `${hours} h ${String(minutes).padStart(2, '0')} min`;
-      else short = `${minutes} min`;
-      return { short, full: `réinitialisation dans ${short}, à ${clock}` };
+      if (days > 0) {
+        const params = { days, hours, time: clock };
+        return { shortKey: 'duration.daysHours', shortParams: params, fullKey: 'reset.in', fullParams: params };
+      }
+      if (hours > 0) {
+        const params = { hours, minutes: String(minutes).padStart(2, '0'), time: clock };
+        return { shortKey: 'duration.hoursMinutes', shortParams: params, fullKey: 'reset.in', fullParams: params };
+      }
+      const params = { minutes, time: clock };
+      return { shortKey: 'duration.minutes', shortParams: params, fullKey: 'reset.in', fullParams: params };
     }
 
     /* ── shared open state between the dock trigger and the overlay panel ── */
@@ -392,8 +479,8 @@ window.__ModuleLoader__.load({
         h('button', {
           type: 'button',
           className: 'mqp_trigger',
-          title: providers.length === 0 ? 'Aucun quota d’abonnement disponible' : 'Quotas d’abonnement',
-          'aria-label': 'Quotas d’abonnement : ' + reading,
+          title: providers.length === 0 ? translate(current.data, 'panel.noData') : translate(current.data, 'panel.title'),
+          'aria-label': translate(current.data, 'panel.title') + ' : ' + reading,
           'aria-haspopup': 'dialog',
           'aria-expanded': current.open ? 'true' : 'false',
           onClick: toggle,
@@ -450,23 +537,23 @@ window.__ModuleLoader__.load({
         className: 'mqp_panel',
         style,
         role: 'dialog',
-        'aria-label': 'Quotas d’abonnement',
+        'aria-label': translate(current.data, 'panel.title'),
       },
       ordered.length === 0
         ? h('div', { className: 'mqp_empty' }, current.error
-            ? 'Quotas indisponibles : ' + current.error
-            : 'Aucun quota d’abonnement disponible')
+            ? translate(current.data, 'panel.unavailable') + ' : ' + current.error
+            : translate(current.data, 'panel.noData'))
         : ordered.map((provider, index) => {
             const providerPercent = worstPercent(provider);
             const providerWindowsList = providerWindows(provider);
             const isFirst = index === 0;
             return h('div', { className: 'mqp_section', key: provider.id },
               isFirst
-                ? h('div', { className: 'mqp_header', title: staleTitle(provider) },
+                ? h('div', { className: 'mqp_header', title: staleTitle(provider, current.data) },
                     h('span', { className: 'mqp_headline' }, provider.label),
                     h('span', { className: 'mqp_percent' }, providerPercent === null ? '—' : providerPercent + ' %'),
-                    h('span', { className: 'mqp_headline' }, 'utilisé'))
-                : h('div', { className: 'mqp_section_head', title: staleTitle(provider) },
+                    h('span', { className: 'mqp_headline' }, translate(current.data, 'panel.used')))
+                : h('div', { className: 'mqp_section_head', title: staleTitle(provider, current.data) },
                     h('span', null, provider.label),
                     provider.plan ? h('span', { className: 'mqp_section_plan' }, provider.plan) : null,
                     h('span', { className: 'mqp_percent', style: { marginLeft: 'auto' } },
@@ -492,19 +579,36 @@ window.__ModuleLoader__.load({
                             className: 'mqp_swatch ' + tints[windowIndex % tints.length],
                             'aria-hidden': true,
                           }),
-                          window.label),
-                        h('dd', { title: reset ? reset.full : undefined },
+                          windowText(current.data, window)),
+                        h('dd', { title: reset ? translate(current.data, reset.fullKey, reset.fullParams) : undefined },
                           window.usedPct + ' %',
-                          reset ? h('span', { className: 'mqp_reset' }, ' · ' + reset.short) : null));
+                          reset
+                            ? h('span', { className: 'mqp_reset' }, ' · ' + translate(current.data, reset.shortKey, reset.shortParams))
+                            : null));
                     })
                   : h('div', { className: 'mqp_row' },
-                      h('dt', null, 'État'),
+                      h('dt', null, translate(current.data, 'panel.state')),
                       h('dd', null, provider.reason ?? '—'))),
 
               provider.status === 'error' && provider.reason
                 ? h('div', { className: 'mqp_note' }, provider.reason)
                 : null);
-          }));
+          }),
+
+      current.data && current.data.session && Array.isArray(current.data.session.models) && current.data.session.models.length > 0
+        ? h('div', { className: 'mqp_section' },
+            h('div', { className: 'mqp_header' },
+              h('span', { className: 'mqp_headline' }, translate(current.data, 'panel.sessionCost')),
+              h('span', { className: 'mqp_percent' }, money(current.data.session.totalUsd, current.data)),
+              h('span', { className: 'mqp_headline' }, translate(current.data, 'panel.estimate'))),
+            h('dl', { className: 'mqp_rows' },
+              current.data.session.models.map((model, index) =>
+                h('div', { className: 'mqp_row', key: 'cost-' + index },
+                  h('dt', { title: (model.provider || '') + ' / ' + (model.model || '') },
+                    h('span', { className: 'mqp_swatch ' + tints[index % tints.length], 'aria-hidden': true }),
+                    model.model || translate(current.data, 'panel.state')),
+                  h('dd', null, model.priced ? money(model.costUsd, current.data) : '—')))))
+        : null);
     }
 
     return {

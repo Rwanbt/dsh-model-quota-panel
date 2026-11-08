@@ -13,12 +13,16 @@
  * quota API, or one that is not connected, is not published at all.
  */
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import zlib from 'node:zlib';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parseProvidersPatch, parseRefs } from './lib/config.js';
+import { MESSAGES } from './lib/i18n.js';
+import { PRICES } from './lib/prices.js';
+import { foldSessionCost } from './lib/session-cost.js';
 import { pct, toIso, windowLabel } from './lib/format.js';
 import {
   mapAnthropicUsage,
@@ -177,6 +181,137 @@ async function providersFromPatch() {
   }
 }
 
+/* ── session cost + currency ──────────────────────────────────────────── */
+
+const SESSIONS_DIR = () =>
+  join(process.env.DSH_HOME && process.env.DSH_HOME !== '' ? process.env.DSH_HOME : join(homedir(), '.dsh'), 'sessions');
+
+let sessionCache = { path: null, key: '', value: null };
+
+/**
+ * Decode a session log that grows by appending whole zstd frames.
+ *
+ * `zstdDecompressSync` stops after the first frame on some runtimes, which
+ * would hide every event written after the session started. Split at the frame
+ * magic, decode each frame, and keep whichever reading yields the most text.
+ */
+function decodeSessionLog(buffer) {
+  let whole = null;
+  try {
+    whole = zlib.zstdDecompressSync(buffer).toString('utf8');
+  } catch {
+    whole = null;
+  }
+
+  const magic = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+  const offsets = [];
+  for (let index = buffer.indexOf(magic); index !== -1; index = buffer.indexOf(magic, index + 4)) {
+    offsets.push(index);
+  }
+
+  if (offsets.length > 1) {
+    const parts = [];
+    for (let index = 0; index < offsets.length; index++) {
+      const slice = buffer.subarray(offsets[index], index + 1 < offsets.length ? offsets[index + 1] : buffer.length);
+      try {
+        parts.push(zlib.zstdDecompressSync(slice).toString('utf8'));
+      } catch {
+        // an interior magic byte splits a frame: fall back to the whole decode
+        parts.length = 0;
+        break;
+      }
+    }
+    const joined = parts.join('');
+    if (whole === null || joined.length > whole.length) return joined;
+  }
+
+  return whole ?? '';
+}
+
+/** Newest `session.v4.jsonl.zstd` files under the session store, newest first. */
+async function newestSessionFiles() {
+  const found = [];
+  const walk = async (directory, depth) => {
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const absolute = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (depth > 0) await walk(absolute, depth - 1);
+        continue;
+      }
+      if (!entry.name.endsWith('.jsonl.zstd')) continue;
+      try {
+        const info = await stat(absolute);
+        found.push({ path: absolute, mtimeMs: info.mtimeMs, size: info.size });
+      } catch {
+        // unreadable entry
+      }
+    }
+  };
+  await walk(SESSIONS_DIR(), 2);
+  found.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return found.slice(0, 4);
+}
+
+/**
+ * Cost of the most recently active session, folded per model. Reads the durable
+ * log the harness already writes; nothing leaves the machine.
+ */
+async function readSessionCost() {
+  const files = await newestSessionFiles();
+  if (files.length === 0) return null;
+  if (typeof zlib.zstdDecompressSync !== 'function') return null; // Node without zstd
+
+  for (const file of files) {
+    const key = `${file.mtimeMs}:${file.size}`;
+    if (sessionCache.path === file.path && sessionCache.key === key) return sessionCache.value;
+    try {
+      const text = decodeSessionLog(await readFile(file.path));
+      const events = [];
+      for (const line of text.split('\n')) {
+        if (line === '') continue;
+        try {
+          events.push(JSON.parse(line));
+        } catch {
+          // a torn trailing line is ignored
+        }
+      }
+      const folded = foldSessionCost(events, PRICES);
+      if (folded.models.length === 0) continue; // a fresh or empty session
+      const value = {
+        id: file.path.split(/[\\/]/).slice(-2, -1)[0] ?? null,
+        updatedAt: new Date(file.mtimeMs).toISOString(),
+        ...folded,
+      };
+      sessionCache = { path: file.path, key, value };
+      return value;
+    } catch (error) {
+      console.warn('[model-quota-panel] could not read the session log:', error?.message);
+    }
+  }
+  return null;
+}
+
+let fxCache = { at: 0, rates: null };
+
+/** USD conversion rates (ECB reference rates), refreshed every six hours. */
+async function fxRates() {
+  const sixHours = 6 * 60 * 60 * 1000;
+  if (fxCache.rates !== null && Date.now() - fxCache.at < sixHours) return fxCache.rates;
+  try {
+    const payload = await getJson('https://api.frankfurter.app/latest?from=USD', { accept: 'application/json' });
+    fxCache = { at: Date.now(), rates: payload?.rates ?? null };
+  } catch {
+    fxCache = { at: Date.now(), rates: fxCache.rates };
+  }
+  return fxCache.rates;
+}
+
 /* ── collection ───────────────────────────────────────────────────────── */
 
 async function collect(ctx, agentDefaultModel) {
@@ -221,7 +356,17 @@ async function collect(ctx, agentDefaultModel) {
     return a.label.localeCompare(b.label);
   });
 
-  return { ok: okEntries.length > 0, generatedAt: new Date().toISOString(), active, providers: visible };
+  const [session, rates] = await Promise.all([readSessionCost(), fxRates()]);
+  return {
+    ok: okEntries.length > 0,
+    generatedAt: new Date().toISOString(),
+    active,
+    providers: visible,
+    messages: MESSAGES,
+    prices: PRICES,
+    fx: { base: 'USD', rates, at: new Date(fxCache.at).toISOString() },
+    session,
+  };
 }
 
 function readActiveSelection(agentDefaultModel) {

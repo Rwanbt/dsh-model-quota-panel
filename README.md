@@ -20,6 +20,8 @@ composer dock:   [◔ 15 % context used]   [◔ 15 % subscription quota]
 - **Progressive everywhere**: every bar grows as you consume. See below.
 - **Quiet by design**: providers without a quota API, or not connected, never appear; transient failures stay hidden while at least one provider answers.
 - **Exact reset readout**: compact duration in the row (`· 3 h 33 min`), full sentence with the local reset time in the row tooltip.
+- **Session cost** for API-key users: the panel adds the price of the session you are looking at, **split per model** when you switched model mid-session.
+- **Five languages** (English, French, Spanish, German, Chinese) and money shown in **your currency and locale**, converted from USD with ECB reference rates.
 
 ## Progressive quota (why Codex looks "inverted" elsewhere)
 
@@ -37,6 +39,24 @@ This plugin normalises everything to **consumption**:
 
 Result: one consistent reading across the panel — `0 %` means untouched, `100 %` means exhausted — and bars that fill up instead of emptying. A Codex window at `0 % / 82 %` therefore means *5-hour window untouched, weekly limit 82 % consumed*, which is the opposite of what the Codex app prints for the same account.
 
+## Session cost
+
+Subscription quotas do not cover pay-per-token users. The panel therefore also prices the **most recently active session** from the durable log the harness already writes:
+
+- `model/selection` and `request/context` events give the provider and model in force,
+- `assistant/message` (and `assistant/attempt`) events carry the token counts, keyed per `turn/step` so one step is never counted twice,
+- each bucket is priced with the table in [`lib/prices.js`](lib/prices.js) (USD per 1 M tokens, input / output / cache read / cache write),
+- the result is a **per-model breakdown**, so switching model mid-conversation keeps the split exact.
+
+Amounts are converted from USD with the ECB reference rates (`api.frankfurter.app`, refreshed every six hours) and rendered with `Intl.NumberFormat` in the user's locale and the currency implied by that locale (`fr-FR` → EUR, `en-US` → USD, `ja-JP` → JPY, …). When a vendor rate is unavailable the panel falls back to USD; when a model has no known price the row shows `—` and the model is reported as unpriced instead of guessing.
+
+Prices are a shipped snapshot: edit `PRICES` when a vendor changes its rates.
+
+## Languages and currencies
+
+The bundle ships five locales (en, fr, es, de, zh), registers them through the harness locale service, and falls back to English for anything missing. Window labels travel from the Host as **semantic keys**, so one payload serves every language; `test/cost.test.js` fails the build when a locale misses a key.
+
+Currencies: USD, EUR, GBP, CHF, CAD, JPY, CNY, AUD, INR, BRL — picked from the browser locale, formatted with `Intl`.
 ## Multiple accounts
 
 Provider instances are discovered from the profile's `llm-pi-ai` provider map, so nothing is hard-coded:
@@ -126,7 +146,7 @@ Why not a plain JSON endpoint: the desktop shell forwards requests to a plugin's
 
 ## Tests and CI
 
-The repository ships a deterministic, dependency-free suite (Node's built-in runner): **33 tests**, no network, no fixtures to refresh.
+The repository ships a deterministic, dependency-free suite (Node's built-in runner): **44 tests**, no network, no fixtures to refresh.
 
 ```sh
 npm test        # node --test
@@ -140,6 +160,7 @@ npm run check   # node --check on both bundle halves
 | `test/format.test.js` | percentage clamping, timestamp normalisation (seconds / ms / ISO), window labels, visibility rules, active-card selection |
 | `test/map.test.js` | every vendor payload → windows mapping, including Codex consumption semantics, Copilot `percent_remaining`, MiniMax status codes |
 | `test/client.test.js` | the browser bundle loaded in a VM sandbox: module id, slot registrations, absence of embedded paths or credentials |
+| `test/cost.test.js` | i18n completeness and placeholders, currency conversion and formatting, token pricing, per-model session folding across model switches |
 | `test/security.test.js` | fails the build on any credential-shaped string, personal absolute path, or tracked runtime artefact |
 
 `.github/workflows/ci.yml` runs that suite on **ubuntu, windows and macos** with **Node 20 and 22**, plus the syntax check. See [SECURITY.md](SECURITY.md) for the security model.

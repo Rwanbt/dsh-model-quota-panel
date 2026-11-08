@@ -71,7 +71,7 @@ test('mapCopilotUser converts percent_remaining into consumption', () => {
 
 test('mapOpenrouterKey only reports a credit window when a limit exists', () => {
   assert.deepEqual(mapOpenrouterKey({ data: { usage: 25, limit: 100 } }).windows, [
-    { label: 'Crédit', usedPct: 25, resetsAt: null },
+    { label: 'Crédit', key: 'credit', usedPct: 25, resetsAt: null },
   ]);
   assert.deepEqual(mapOpenrouterKey({ data: { usage: 25 } }).windows, []);
   assert.deepEqual(mapOpenrouterKey({}).windows, []);

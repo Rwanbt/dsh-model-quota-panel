@@ -86,9 +86,12 @@ Then, in a DSH session of the profile you use: **Plugins → Add plugin**, pick 
 
 ### No path to configure
 
-The Host half publishes a snapshot as `quotas.json` next to `index.js`, and the browser half reads it through DSH's built-in `api/file` route, which needs an absolute path. The Host injects that path into the page at boot (`window.__MODEL_QUOTA_PANEL__.path`), so a clone works from any directory, on any OS, with no editing.
+The Host half publishes the snapshot twice:
 
-If your environment ever drops that index injection, the literal `QUOTAS_FILE` near the top of [`client.js`](client.js) is the fallback; set it to the absolute path of `quotas.json` for your install.
+1. next to `index.js` as `quotas.json`, and
+2. into `assets/quotas.svg` (JSON bytes, `.svg` name because DSH's plugin-asset route only serves image extensions).
+
+The browser reads it through the **plugin-asset route** — a plain relative URL, `plugins/dsh-model-quota-panel/assets/quotas.svg` — so no filesystem path is involved and nothing has to be edited on any OS. Two fallbacks remain, in order: the absolute path the Host injects into the page at boot (`window.__MODEL_QUOTA_PANEL__.path`, remembered in `localStorage`), then DSH's built-in `api/file` route with that same path.
 
 ## Compatibility
 
@@ -110,7 +113,7 @@ Credentials are read from the same places on every OS: `~/.codex/auth.json`, `~/
 | `client.js` (browser) | Registers a meter into `conversation.composer.dock` (the row holding the context meter, `order: 1` puts it on the right) and a panel into `shell.overlay` (the frame-wide floating layer, so the composer can never clip it). |
 | Session awareness | Reads the open session id, then its `modelSelection` projection, and matches the provider instance — exact id first, family second. |
 
-Why a file instead of an endpoint: the desktop shell forwards requests to a plugin's own web routes but never delivers their responses, so a JSON route would hang in the page. The published snapshot is the working channel.
+Why not a plain JSON endpoint: the desktop shell forwards requests to a plugin's own web routes but does not deliver their responses, so a custom `/api/…` route hangs in the page. A **connection-level Fetch route** (`connection.fetch.register`, the same mechanism behind the built-in `/api/file`) is registered as a second option, and the plugin-asset route is the primary one because it is a relative URL that always answers.
 
 ## Troubleshooting
 

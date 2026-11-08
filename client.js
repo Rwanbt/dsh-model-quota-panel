@@ -19,6 +19,8 @@ window.__ModuleLoader__.load({
     const h = React.createElement;
     const { useState, useEffect, useRef, useCallback } = React;
 
+    /** This bundle's package name, equal to the module id asserted by the tests. */
+    const PACKAGE_ID = 'dsh-model-quota-panel';
     const STYLE_ID = 'model-quota-panel-styles';
     const PANEL_WIDTH = 264;
     const RADIUS = 5.5;
@@ -30,12 +32,30 @@ window.__ModuleLoader__.load({
      * was rendered without the injection (a reload fixes it) — the panel then
      * says so instead of guessing a path.
      */
-    const QUOTAS_FILE =
-      typeof window !== 'undefined' &&
-      window.__MODEL_QUOTA_PANEL__ &&
-      typeof window.__MODEL_QUOTA_PANEL__.path === 'string'
-        ? window.__MODEL_QUOTA_PANEL__.path
-        : '';
+    const STORAGE_KEY = 'dsh.model-quota.snapshot';
+
+    /** Absolute path of the snapshot: injected by the Host at boot, or remembered
+     *  from a previous page load. Reading it lazily lets a page that booted
+     *  before the injection existed pick it up after the first success. */
+    function snapshotPath() {
+      try {
+        if (typeof window !== 'undefined' && window.__MODEL_QUOTA_PANEL__ && typeof window.__MODEL_QUOTA_PANEL__.path === 'string') {
+          const injected = window.__MODEL_QUOTA_PANEL__.path;
+          if (injected !== '') {
+            try {
+              window.localStorage.setItem(STORAGE_KEY, injected);
+            } catch (error) {
+              // storage may be unavailable
+            }
+            return injected;
+          }
+        }
+        const stored = window.localStorage ? window.localStorage.getItem(STORAGE_KEY) : null;
+        return typeof stored === 'string' ? stored : '';
+      } catch (error) {
+        return '';
+      }
+    }
 
     /* ── styles: same values as ui-conversation ContextMeter.module.css ── */
 
@@ -147,14 +167,36 @@ window.__ModuleLoader__.load({
 
     /* ── data ─────────────────────────────────────────────────────────── */
 
+    /**
+     * Where the snapshot may be read from, in order:
+     *  1. the plugin-asset route — a plain relative URL, so no filesystem path
+     *     and no page reload are needed;
+     *  2. the absolute path the Host injects into the page at boot;
+     *  3. the same path passed through the built-in `api/file` route.
+     */
+    function quotaSources() {
+      // A relative plugin-asset URL first: no filesystem path, no page reload.
+      const sources = ['plugins/' + PACKAGE_ID + '/assets/quotas.svg'];
+      const path = snapshotPath();
+      if (path !== '') sources.push('api/file?path=' + encodeURIComponent(path));
+      sources.push('api/model-quota');
+      return sources;
+    }
+
     async function readQuotas() {
-      if (QUOTAS_FILE === '') {
-        throw new Error('chemin du relevé non injecté — recharge la fenêtre (Ctrl+R)');
+      let lastError = null;
+      for (const source of quotaSources()) {
+        try {
+          const url = source + (source.includes('?') ? '&' : '?') + 't=' + Date.now();
+          const response = await fetch(url);
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          const parsed = await response.json();
+          return parsed;
+        } catch (error) {
+          lastError = error;
+        }
       }
-      const url = 'api/file?path=' + encodeURIComponent(QUOTAS_FILE) + '&t=' + Date.now();
-      const response = await fetch(url);
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      return response.json();
+      throw lastError ?? new Error('aucune source de quota disponible');
     }
 
 

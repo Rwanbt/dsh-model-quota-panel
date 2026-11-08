@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const IGNORED_DIRECTORIES = new Set(['.git', 'node_modules', 'test']);
 const SDK_ONLY_FILES = new Set(['quotas.json', 'boot.log', 'debug.json']);
+const IGNORED_ASSET_DIRECTORY = 'assets';
 
 /** Every source file the repository tracks (the test suite excluded). */
 async function sourceFiles(directory = ROOT, output = []) {
@@ -14,7 +15,7 @@ async function sourceFiles(directory = ROOT, output = []) {
     const absolute = join(directory, entry.name);
     const name = relative(ROOT, absolute);
     if (entry.isDirectory()) {
-      if (IGNORED_DIRECTORIES.has(entry.name)) continue;
+      if (IGNORED_DIRECTORIES.has(entry.name) || entry.name === IGNORED_ASSET_DIRECTORY) continue;
       await sourceFiles(absolute, output);
       continue;
     }
@@ -57,7 +58,7 @@ test('no personal absolute path is committed', async () => {
 
 test('runtime artefacts stay out of the repository', async () => {
   const ignore = await readFile(join(ROOT, '.gitignore'), 'utf8');
-  for (const artefact of ['quotas.json', 'boot.log', 'debug.json', 'node_modules']) {
+  for (const artefact of ['quotas.json', 'boot.log', 'debug.json', 'node_modules', 'assets/']) {
     assert.match(ignore, new RegExp(artefact.replace('.', '\\.')), `${artefact} must be ignored`);
   }
 });

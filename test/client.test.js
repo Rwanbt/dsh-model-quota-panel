@@ -115,7 +115,13 @@ test('the injected snapshot path is read from the page', () => {
   assert.equal(window.__MODEL_QUOTA_PANEL__.path, '/tmp/model-quota/quotas.json');
 });
 
-test('the meter probes only the documented data route', () => {
-  assert.ok(clientSource.includes("api/file?path="));
-  assert.ok(!clientSource.includes('/api/mq-probe'));
+test('the meter reads the snapshot from the plugin asset route first', () => {
+  assert.ok(clientSource.includes("'/assets/quotas.svg'"), 'asset route is the primary source');
+  assert.ok(clientSource.includes('api/file?path='), 'api/file stays as a fallback');
+  assert.ok(!clientSource.includes('/api/mq-probe'), 'no diagnostic route in the shipped bundle');
+});
+
+test('the snapshot path is remembered across page loads', () => {
+  assert.ok(clientSource.includes("'dsh.model-quota.snapshot'"));
+  assert.ok(clientSource.includes('localStorage.setItem'));
 });

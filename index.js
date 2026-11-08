@@ -35,6 +35,7 @@ import { KIND_LABEL, kindOfModelProvider, kindOfProvider, labelInstances } from 
 const REQUEST_TIMEOUT_MS = 12_000;
 const PUBLISH_INTERVAL_MS = 20_000;
 const QUOTAS_PATH = new URL('./quotas.json', import.meta.url);
+const ASSET_PATH = new URL('./assets/quotas.svg', import.meta.url);
 
 const DSH_CREDENTIALS = () =>
   process.env.DSH_HOME && process.env.DSH_HOME !== ''
@@ -89,10 +90,39 @@ export function apply(ctx) {
     );
   }
 
+  // The supported way for a plugin to answer the page: a connection-level Fetch
+  // route, served through the same bridge as the built-in `/api/file`, so the
+  // desktop shell delivers its response (a plain webServer route does not).
+  const connection = ctx.get('connection');
+  if (connection && connection.fetch && typeof connection.fetch.register === 'function') {
+    ctx.effect(() => {
+      try {
+        return connection.fetch.register({
+          path: '/api/model-quota',
+          methods: ['GET'],
+          fetch: async () => {
+            const value = await collect(ctx, agentDefaultModel);
+            return new Response(JSON.stringify(value), {
+              headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+            });
+          },
+        });
+      } catch (error) {
+        console.warn('[model-quota-panel] quota route already registered:', error?.message);
+        return () => {};
+      }
+    }, 'model-quota-panel: quota fetch route');
+  }
+
   const publish = async () => {
     try {
       const value = await collect(ctx, agentDefaultModel);
-      await writeFile(QUOTAS_PATH, JSON.stringify(value), 'utf8');
+      const serialised = JSON.stringify(value);
+      await writeFile(QUOTAS_PATH, serialised, 'utf8');
+      // Also publish through the plugin-asset route: a plain relative URL the
+      // page can fetch without knowing any filesystem path. The route only
+      // serves image extensions, hence the .svg name.
+      await writeFile(ASSET_PATH, serialised, 'utf8').catch(() => {});
     } catch (error) {
       console.warn('[model-quota-panel] could not publish quotas.json:', error?.message);
     }

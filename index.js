@@ -17,14 +17,6 @@ const REQUEST_TIMEOUT_MS = 12_000;
 const PUBLISH_INTERVAL_MS = 20_000;
 const QUOTAS_PATH = new URL('./quotas.json', import.meta.url);
 
-/**
- * Codex windows: the API field is used_percent and its own flags match that
- * reading (limit_reached stayed false while the short window sat at 0), so the
- * consumed percentage is shown directly and every bar grows as you use it.
- * Set to true only if OpenAI starts reporting the remaining quota instead.
- */
-const CODEX_WINDOWS_ARE_REMAINING = false;
-
 const OPENCODE_AUTH = () => join(homedir(), '.local', 'share', 'opencode', 'auth.json');
 const DSH_CREDENTIALS = () =>
   process.env.DSH_HOME && process.env.DSH_HOME !== ''
@@ -219,6 +211,15 @@ async function opencodeGoQuota(refs, activeKind) {
 
 /* ── Codex (ChatGPT) ──────────────────────────────────────────────────── */
 
+/** Window label from the vendor's own window length (18000 s -> "Fenêtre 5 h"). */
+function codexWindowLabel(seconds, fallback) {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return fallback;
+  if (seconds >= 7 * 86400) return 'Semaine';
+  if (seconds >= 86400) return `Fenêtre ${Math.round(seconds / 86400)} j`;
+  if (seconds >= 3600) return `Fenêtre ${Math.round(seconds / 3600)} h`;
+  return `Fenêtre ${Math.round(seconds / 60)} min`;
+}
+
 async function codexQuota(activeKind) {
   const entry = base('openai-codex', 'Codex (ChatGPT)', activeKind);
   const auth = await readJsonFile(join(homedir(), '.codex', 'auth.json'));
@@ -236,11 +237,9 @@ async function codexQuota(activeKind) {
       if (!window || typeof window.used_percent !== 'number') continue;
       const seconds = window.limit_window_seconds;
       entry.windows.push({
-        label: typeof seconds === 'number' && seconds >= 7 * 86400 ? 'Semaine' : fallback,
-        // OpenAI reports the Codex windows as *remaining* quota. Every other
-        // provider here reports consumption, so invert it once, here, to keep
-        // the whole panel progressive (a bar that grows as you use it).
-        usedPct: pct(CODEX_WINDOWS_ARE_REMAINING ? 100 - window.used_percent : window.used_percent),
+        label: codexWindowLabel(seconds, fallback),
+        // The API field is the consumed percentage, so the bar grows with use.
+        usedPct: pct(window.used_percent),
         resetsAt: toIso(window.reset_at),
       });
     }

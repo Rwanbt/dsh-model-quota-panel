@@ -207,15 +207,25 @@ window.__ModuleLoader__.load({
       return list.find((provider) => provider.active) ?? list.find((provider) => worstPercent(provider) !== null) ?? null;
     }
 
+    /**
+     * Exact reset readout: countdown down to the minute, then the local clock
+     * time it lands on, e.g. "dans 4 h 58 min (20:09)".
+     */
     function formatReset(iso) {
       if (!iso) return null;
       const at = new Date(iso);
       if (Number.isNaN(at.getTime())) return null;
-      const minutes = Math.round((at.getTime() - Date.now()) / 60000);
-      if (minutes <= 0) return 'réinitialisé';
-      if (minutes < 60) return `dans ${minutes} min`;
-      if (minutes < 48 * 60) return `dans ${Math.round(minutes / 60)} h`;
-      return `le ${at.toLocaleDateString(undefined, { day: '2-digit', month: 'short' })}`;
+      const totalMinutes = Math.round((at.getTime() - Date.now()) / 60000);
+      const clock = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      if (totalMinutes <= 0) return 'réinitialisé (' + clock + ')';
+      const days = Math.floor(totalMinutes / 1440);
+      const hours = Math.floor((totalMinutes % 1440) / 60);
+      const minutes = totalMinutes % 60;
+      let duration;
+      if (days > 0) duration = `${days} j ${hours} h`;
+      else if (hours > 0) duration = `${hours} h ${String(minutes).padStart(2, '0')} min`;
+      else duration = `${minutes} min`;
+      return `dans ${duration} (${clock})`;
     }
 
     /* ── shared open state between the dock trigger and the overlay panel ── */

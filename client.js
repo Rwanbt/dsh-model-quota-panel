@@ -72,7 +72,10 @@ window.__ModuleLoader__.load({
         margin-left: auto; font-weight: 500;
       }
       .mqp_percent { color: var(--dsw-alias-label-primary); font-weight: 500; }
-      .mqp_headline { color: var(--dsw-alias-label-tertiary); }
+      .mqp_headline {
+        color: var(--dsw-alias-label-tertiary);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
       .mqp_headline:empty { display: none; }
       .mqp_bar {
         corner-shape: round; background: var(--dsw-alias-interactive-bg-hover);
@@ -95,7 +98,10 @@ window.__ModuleLoader__.load({
         justify-content: space-between; align-items: center; gap: 12px;
         padding: 2px 0; display: flex;
       }
-      .mqp_row dt { color: var(--dsw-alias-label-secondary); }
+      .mqp_row dt {
+        color: var(--dsw-alias-label-secondary);
+        min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
       .mqp_row dd {
         font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-primary);
         margin: 0; white-space: nowrap;
@@ -105,7 +111,9 @@ window.__ModuleLoader__.load({
       .mqp_section_head {
         align-items: center; gap: 6px; display: flex;
         color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 20px;
+        white-space: nowrap; overflow: hidden;
       }
+      .mqp_section_head > span:first-child { overflow: hidden; text-overflow: ellipsis; }
       .mqp_section_plan {
         margin-left: auto; text-transform: uppercase; letter-spacing: .03em; font-size: 10px;
       }
@@ -220,21 +228,25 @@ window.__ModuleLoader__.load({
      * Exact reset readout: countdown down to the minute, then the local clock
      * time it lands on, e.g. "dans 4 h 58 min (20:09)".
      */
-    function formatReset(iso) {
+    /**
+     * Reset readout: a compact duration for the row, and the full sentence for
+     * the row's tooltip so the panel never wraps.
+     */
+    function resetParts(iso) {
       if (!iso) return null;
       const at = new Date(iso);
       if (Number.isNaN(at.getTime())) return null;
       const totalMinutes = Math.round((at.getTime() - Date.now()) / 60000);
       const clock = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-      if (totalMinutes <= 0) return 'réinitialisé (' + clock + ')';
+      if (totalMinutes <= 0) return { short: 'réinitialisé', full: `réinitialisation effectuée à ${clock}` };
       const days = Math.floor(totalMinutes / 1440);
       const hours = Math.floor((totalMinutes % 1440) / 60);
       const minutes = totalMinutes % 60;
-      let duration;
-      if (days > 0) duration = `${days} j ${hours} h`;
-      else if (hours > 0) duration = `${hours} h ${String(minutes).padStart(2, '0')} min`;
-      else duration = `${minutes} min`;
-      return `dans ${duration} (${clock})`;
+      let short;
+      if (days > 0) short = `${days} j ${hours} h`;
+      else if (hours > 0) short = `${hours} h ${String(minutes).padStart(2, '0')} min`;
+      else short = `${minutes} min`;
+      return { short, full: `réinitialisation dans ${short}, à ${clock}` };
     }
 
     /* ── shared open state between the dock trigger and the overlay panel ── */
@@ -411,19 +423,19 @@ window.__ModuleLoader__.load({
 
               h('dl', { className: 'mqp_rows' },
                 providerWindowsList.length > 0
-                  ? providerWindowsList.map((window, windowIndex) =>
-                      h('div', { className: 'mqp_row', key: provider.id + '-row-' + windowIndex },
+                  ? providerWindowsList.map((window, windowIndex) => {
+                      const reset = resetParts(window.resetsAt);
+                      return h('div', { className: 'mqp_row', key: provider.id + '-row-' + windowIndex },
                         h('dt', null,
                           h('span', {
                             className: 'mqp_swatch ' + tints[windowIndex % tints.length],
                             'aria-hidden': true,
                           }),
                           window.label),
-                        h('dd', null,
-                          window.usedPct + ' % · reste ' + Math.max(0, 100 - window.usedPct) + ' %',
-                          formatReset(window.resetsAt)
-                            ? h('span', { className: 'mqp_reset' }, ' · ' + formatReset(window.resetsAt))
-                            : null)))
+                        h('dd', { title: reset ? reset.full : undefined },
+                          window.usedPct + ' %',
+                          reset ? h('span', { className: 'mqp_reset' }, ' · ' + reset.short) : null));
+                    })
                   : h('div', { className: 'mqp_row' },
                       h('dt', null, 'État'),
                       h('dd', null, provider.reason ?? '—'))),

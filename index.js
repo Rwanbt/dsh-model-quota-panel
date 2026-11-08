@@ -16,6 +16,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const REQUEST_TIMEOUT_MS = 12_000;
 const PUBLISH_INTERVAL_MS = 20_000;
@@ -46,7 +47,7 @@ export function apply(ctx) {
     }
   };
 
-  void publish();
+  void seedReadings().then(publish);
   const timer = setInterval(() => void publish(), PUBLISH_INTERVAL_MS);
   ctx.effect(() => () => clearInterval(timer), 'model-quota-panel: publisher');
 }
@@ -229,16 +230,87 @@ async function collect(ctx, agentDefaultModel) {
   };
 }
 
-async function describeInstance(instance, state) {
-  if (instance.kind === 'opencode-go') return opencodeQuota(instance, state);
-  if (instance.kind === 'anthropic') return anthropicQuota(instance, state);
-  if (instance.kind === 'openrouter') return openrouterQuota(instance, state);
-  if (instance.kind === 'zai') return zaiQuota(instance, state);
-  if (instance.kind === 'github-copilot') return copilotQuota(instance, state);
-  if (instance.kind === 'moonshot') return moonshotQuota(instance, state);
-  if (instance.kind === 'minimax') return minimaxQuota(instance, state);
-  if (instance.kind === 'openai-codex') return codexConfiguredQuota(instance, state);
+/** Last successful reading per provider instance, so a flaky vendor endpoint
+ *  does not make the card disappear. */
+const goodReadings = new Map();
+
+/** Restores the previous snapshot so cards survive a restart before any vendor
+ *  answers (Anthropic in particular rate-limits its usage endpoint). */
+async function seedReadings() {
+  const previous = await readJsonFile(fileURLToPath(QUOTAS_PATH));
+  const providers = Array.isArray(previous?.providers) ? previous.providers : [];
+  for (const provider of providers) {
+    if (!provider || typeof provider.id !== 'string' || !Array.isArray(provider.windows)) continue;
+    if (provider.windows.length === 0) continue;
+    const at = typeof provider.updatedAt === 'string' ? Date.parse(provider.updatedAt) : Date.now();
+    const updatedAt = typeof provider.updatedAt === 'string' ? provider.updatedAt : new Date().toISOString();
+    goodReadings.set(provider.id, {
+      at: Number.isNaN(at) ? Date.now() : at,
+      updatedAt,
+      entry: cloneEntry(provider),
+    });
+  }
+}
+/** Anthropic rate-limits its usage endpoint hard: refresh it less often. */
+const ANTHROPIC_REFRESH_MS = 4 * 60_000;
+/** Keep showing a stale reading for this long before dropping the card. */
+const STALE_MAX_MS = 20 * 60_000;
+
+function adapterFor(kind) {
+  if (kind === 'opencode-go') return opencodeQuota;
+  if (kind === 'anthropic') return anthropicQuota;
+  if (kind === 'openrouter') return openrouterQuota;
+  if (kind === 'zai') return zaiQuota;
+  if (kind === 'github-copilot') return copilotQuota;
+  if (kind === 'moonshot') return moonshotQuota;
+  if (kind === 'minimax') return minimaxQuota;
+  if (kind === 'openai-codex') return codexConfiguredQuota;
   return null;
+}
+
+function cloneEntry(entry) {
+  return { ...entry, windows: entry.windows.map((window) => ({ ...window })) };
+}
+
+/** Re-applies the live `active` flag and records where the values came from. */
+function finalizeEntry(entry, state, updatedAt, stale) {
+  return {
+    ...entry,
+    windows: entry.windows.map((window) => ({ ...window })),
+    active: state.exact === true || entry.kind === state.activeKind,
+    stale: stale === true,
+    updatedAt: updatedAt ?? null,
+  };
+}
+
+async function describeInstance(instance, state) {
+  const adapter = adapterFor(instance.kind);
+  if (!adapter) return null;
+
+  const cached = goodReadings.get(instance.id);
+  const refreshMs = instance.kind === 'anthropic' ? ANTHROPIC_REFRESH_MS : 0;
+  if (cached && refreshMs > 0 && Date.now() - cached.at < refreshMs) {
+    return finalizeEntry(cached.entry, state, cached.updatedAt, true);
+  }
+
+  let entry = null;
+  try {
+    entry = await adapter(instance, state);
+  } catch (error) {
+    entry = null;
+  }
+
+  if (entry && entry.status === 'ok') {
+    const updatedAt = new Date().toISOString();
+    goodReadings.set(instance.id, { at: Date.now(), updatedAt, entry: cloneEntry(entry) });
+    return finalizeEntry(entry, state, updatedAt, false);
+  }
+
+  // The vendor failed: keep the last good reading instead of hiding the card.
+  if (cached && Date.now() - cached.at < STALE_MAX_MS) {
+    return finalizeEntry(cached.entry, state, cached.updatedAt, true);
+  }
+  return entry ? finalizeEntry(entry, state, null, false) : null;
 }
 
 function readActiveSelection(agentDefaultModel) {

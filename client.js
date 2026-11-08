@@ -160,6 +160,14 @@ window.__ModuleLoader__.load({
       return Array.isArray(provider?.windows) ? provider.windows.filter((w) => typeof w.usedPct === 'number') : [];
     }
 
+    /** Tooltip text telling when a kept-over reading was taken. */
+    function staleTitle(provider) {
+      if (!provider || provider.stale !== true || !provider.updatedAt) return undefined;
+      const at = new Date(provider.updatedAt);
+      if (Number.isNaN(at.getTime())) return undefined;
+      return 'Valeurs relevées à ' + at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    }
+
     function worstPercent(provider) {
       let worst = null;
       for (const window of providerWindows(provider)) {
@@ -400,11 +408,11 @@ window.__ModuleLoader__.load({
             const isFirst = index === 0;
             return h('div', { className: 'mqp_section', key: provider.id },
               isFirst
-                ? h('div', { className: 'mqp_header' },
+                ? h('div', { className: 'mqp_header', title: staleTitle(provider) },
                     h('span', { className: 'mqp_headline' }, provider.label),
                     h('span', { className: 'mqp_percent' }, providerPercent === null ? '—' : providerPercent + ' %'),
                     h('span', { className: 'mqp_headline' }, 'utilisé'))
-                : h('div', { className: 'mqp_section_head' },
+                : h('div', { className: 'mqp_section_head', title: staleTitle(provider) },
                     h('span', null, provider.label),
                     provider.plan ? h('span', { className: 'mqp_section_plan' }, provider.plan) : null,
                     h('span', { className: 'mqp_percent', style: { marginLeft: 'auto' } },

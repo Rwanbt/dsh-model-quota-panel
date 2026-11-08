@@ -1,68 +1,135 @@
 # dsh-model-quota-panel
 
-A [DeepSeek Harness](https://www.deepseek.com/en/harness/) plugin that shows the **quota of the AI subscriptions you actually use**, right where you write: a progress ring next to the composer's native "context used" meter, and a floating panel with the detailed windows.
+A [DeepSeek Harness](https://www.deepseek.com/en/harness/) plugin that puts **your AI subscription quotas** where you actually write.
 
-It never invents a number: every value comes from the vendor's own usage endpoint, and a provider that has no quota API — or that is not connected — is simply not shown.
+It adds a progress ring next to the composer's built-in *context used* meter, and a click-opened panel that is a pixel-level copy of that meter's panel. Every number comes from the vendor's own usage endpoint: no estimate, no placeholder, and a provider with no quota API — or one that is not connected — is simply not displayed.
+
+```
+composer dock:   [◔ 15 % context used]   [◔ 15 % subscription quota]
+                                              ↑ this plugin
+```
 
 ## Features
 
-- **Ring + percentage in the composer dock**, immediately to the right of the built-in context meter, using that meter's exact tokens, geometry and typography. It always describes the **subscription of the model the current conversation uses** — not the profile default — and follows a model switch within a couple of seconds.
-- **Panel on click**, visually identical to the context panel (same `--dsw-*` tokens, 264 px width, segmented bar, swatch legend, anchored above the trigger, Escape / outside click to close).
-- **One card per connected subscription**, active provider first, reset countdowns included.
-- **Silent about noise**: providers without a quota API, or not connected, never appear.
+- **Ring + percentage in the composer dock**, immediately to the right of the context meter, using that meter's exact tokens, geometry and typography — same 14 px ring, same 13 px tabular figure, same hover surface.
+- **Panel on click**, identical to the context panel: same `--dsw-*` tokens, 264 px width, segmented bar, swatch legend, anchored above the trigger; closes on Escape, outside click, or a second click.
+- **Describes the subscription of the model the open conversation uses**, not the profile default. Switching model updates the ring within two seconds.
+- **Any number of accounts per vendor** (two OpenCode Go subscriptions, a second Anthropic account, …), each with its own card.
+- **Progressive everywhere**: every bar grows as you consume. See below.
+- **Quiet by design**: providers without a quota API, or not connected, never appear; transient failures stay hidden while at least one provider answers.
+- **Exact reset readout**: compact duration in the row (`· 3 h 33 min`), full sentence with the local reset time in the row tooltip.
+
+## Progressive quota (why Codex looks "inverted" elsewhere)
+
+Quota screens disagree on direction. Codex, for instance, shows **remaining** allowance, so its numbers go *down* as you work, and the same is true of some vendor CLIs.
+
+This plugin normalises everything to **consumption**:
+
+| Vendor | Raw field | What the panel shows |
+| --- | --- | --- |
+| OpenCode Go | `percent` | consumed directly |
+| Codex (ChatGPT) | `used_percent` | consumed directly |
+| Claude (OAuth) | `utilization` | consumed directly |
+| GitHub Copilot | `percent_remaining` | `100 − remaining` |
+| MiniMax | `current_*_usage_count / total` | consumed ratio |
+
+Result: one consistent reading across the panel — `0 %` means untouched, `100 %` means exhausted — and bars that fill up instead of emptying. A Codex window at `0 % / 82 %` therefore means *5-hour window untouched, weekly limit 82 % consumed*, which is the opposite of what the Codex app prints for the same account.
 
 ## Multiple accounts
 
-Provider instances are discovered from the profile's `llm-pi-ai` provider map, so any number of accounts per vendor works: a second OpenCode Go subscription added as `opencode-go-2` with its own `apiKeyEnv` is reported as its own card, named after its `displayName`. The meter and the panel header always follow the provider id of the model the open conversation uses, then fall back to its provider family.
+Provider instances are discovered from the profile's `llm-pi-ai` provider map, so nothing is hard-coded:
+
+```yaml
+# ~/.dsh/profiles/<profile>/cordis.patch.yml
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      opencode-go:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+      opencode-go-2:
+        displayName: opencode-go 2
+        apiKeyEnv: OPENCODE_GO_2_API_KEY
+```
+
+Each entry becomes its own card, named after its `displayName`. The meter and the panel header follow the **exact provider id** of the conversation's model first (so `opencode-go` and `opencode-go-2` are distinguished), then fall back to the provider family.
+
 ## Supported providers
 
-| Provider | Endpoint used | Notes |
+| Provider | Endpoint used | Credential |
 | --- | --- | --- |
-| **OpenCode Go** | `opencode.ai/inference/go/v1/usage` | rolling / weekly / monthly windows; key read from the DSH credential store (`OPENCODE_GO_API_KEY`) |
-| **Codex (ChatGPT)** | `chatgpt.com/backend-api/wham/usage` | needs `~/.codex/auth.json` (run `codex login`) |
-| **Claude Code** | `api.anthropic.com/api/oauth/usage` | needs `~/.claude/.credentials.json` (run `claude`, then `/login`) |
-| **MiniMax** | `api.minimax.io/v1/coding_plan/remains` | needs an active token/coding plan |
-| **Z.ai (GLM)** | `api.z.ai/api/monitor/usage/quota/limit` | needs a coding plan on the account |
-| **OpenRouter** | `openrouter.ai/api/v1/key` | reads the credit limit from the key itself |
-| **GitHub Copilot** | `copilot_internal/v2/token` + `/user` | needs a Copilot OAuth token |
-| **Moonshot / Kimi** | `api.moonshot.cn/v1/users/me/balance` | reports the balance, no percentage |
-| MiniMax API, Perplexity, Google/Gemini, Mistral, Groq, Cerebras, NVIDIA | — | no public quota endpoint; not displayed |
+| **OpenCode Go** | `https://opencode.ai/inference/go/v1/usage` | `OPENCODE_GO_API_KEY` (profile `apiKeyEnv`), DSH store, env, or OpenCode store |
+| **Codex (ChatGPT)** | `https://chatgpt.com/backend-api/wham/usage` | `~/.codex/auth.json` (`codex login`) |
+| **Claude (OAuth account)** | `https://api.anthropic.com/api/oauth/usage` | profile `apiKeyEnv` holding an `sk-ant-oat…` token, or `~/.claude/.credentials.json` |
+| **Anthropic CLI account** | same endpoint | `~/.claude/.credentials.json` (`claude` then `/login`) |
+| **MiniMax** | `https://api.minimax.io/v1/coding_plan/remains` | `apiKeyEnv` / `MINIMAX_API_KEY` (needs an active coding plan) |
+| **Z.ai (GLM)** | `https://api.z.ai/api/monitor/usage/quota/limit` | `apiKeyEnv` (needs a coding plan) |
+| **OpenRouter** | `https://openrouter.ai/api/v1/key` | `apiKeyEnv`; the credit limit comes from the key itself |
+| **GitHub Copilot** | `copilot_internal/v2/token` → `copilot_internal/user` | Copilot OAuth token |
+| **Moonshot / Kimi** | `https://api.moonshot.cn/v1/users/me/balance` | `apiKeyEnv`; reports a balance, not a percentage |
 
-API keys are read from, in order: the DSH credential store (`<DSH_HOME>/.credentials.yaml`, `refs:` block), the process environment, then the OpenCode CLI store (`~/.local/share/opencode/auth.json`). No key is ever sent anywhere except the vendor's own API.
+Providers with **no public quota endpoint** are never displayed: Perplexity, Google / Gemini API keys, Mistral, Groq, Cerebras, NVIDIA, and MiniMax API keys (only MiniMax *coding plans* expose a quota).
+
+Keys are resolved from, in order: the profile's `apiKeyEnv` in the DSH credential store (`<DSH_HOME>/.credentials.yaml`, `refs:` block), the process environment, then the OpenCode CLI store (`~/.local/share/opencode/auth.json`). A key is only ever sent to that vendor's own API.
 
 ## Install
 
-The plugin is a normal DeepSeek Harness bundle. From a checkout:
+The plugin is an ordinary DeepSeek Harness bundle.
 
 ```sh
 git clone https://github.com/Rwanbt/dsh-model-quota-panel.git
 ```
 
-Then, in a DSH session of the profile you use, install the bundle from that directory (Plugins → Add plugin, or the `plugin_manager` tool / `dsh plugin --profile <name> add link:<absolute path>`), and enable it.
+Then, in a DSH session of the profile you use: **Plugins → Add plugin**, pick the cloned directory (or use `plugin_manager` / `dsh plugin --profile <name> add link:<absolute path>`), and enable the bundle. It needs DeepSeek Harness 0.2.2-rc.1 (Web or Desktop).
 
-### One line to check after installing elsewhere
+### The one line to check
 
-The Host half publishes a snapshot as `quotas.json` next to `index.js`, and the browser half reads it through DSH's built-in `api/file` route — that route needs an absolute path. Set it near the top of `client.js`:
+The Host half publishes a snapshot as `quotas.json` next to `index.js`, and the browser half reads it through DSH's built-in `api/file` route, which requires an absolute path. Edit the constant near the top of [`client.js`](client.js):
 
 ```js
-const QUOTAS_FILE = '/absolute/path/to/dsh-model-quota-panel/quotas.json';
+const QUOTAS_FILE =
+  'C:/Users/you/path/to/dsh-model-quota-panel/quotas.json';
 ```
 
-Nothing else is configurable.
+Nothing else needs configuring.
 
 ## How it works
 
-- `index.js` (Host): every 20 s, plus once at startup, it asks each vendor for the current usage and writes the result to `quotas.json`. Providers without an API, or not connected, are filtered out before publication.
-- `client.js` (browser): registers a meter into `conversation.composer.dock` (the row holding the context meter, `order: 1` puts it on the right) and a panel into `shell.overlay` (the frame-wide floating layer, so the composer can never clip it). It re-reads the snapshot every 20 s.
+| Part | Role |
+| --- | --- |
+| `index.js` (Host) | Reads the profile provider map, asks each vendor for its usage every 20 s (plus once at start), filters, and writes `quotas.json`. |
+| `client.js` (browser) | Registers a meter into `conversation.composer.dock` (the row holding the context meter, `order: 1` puts it on the right) and a panel into `shell.overlay` (the frame-wide floating layer, so the composer can never clip it). |
+| Session awareness | Reads the open session id, then its `modelSelection` projection, and matches the provider instance — exact id first, family second. |
+
+Why a file instead of an endpoint: the desktop shell forwards requests to a plugin's own web routes but never delivers their responses, so a JSON route would hang in the page. The published snapshot is the working channel.
+
+## Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| No ring in the composer | The plugin must be **enabled** in Plugins; then reload the window (`Ctrl+R`). |
+| Ring present, panel empty | `QUOTAS_FILE` does not point at this install, or no provider is connected. |
+| A provider is missing | It has no quota API, its credential is absent, or its endpoint answered with an error (429/401/403) while another provider worked; it returns on its own. |
+| Wrong subscription shown | The conversation's model provider has no matching card, so the panel fell back to the first available one. |
 
 ## Limitations
 
-- The desktop shell does not deliver responses from a plugin's own web routes, hence the file snapshot instead of a JSON endpoint.
-- Refresh granularity is 20 s; a window that resets may take that long to show it.
-- Rate-limited vendors (HTTP 429) are displayed with the vendor message while no other provider answers, and hidden otherwise.
-- Linux/macOS are untested; the credential paths are the Windows/macOS/Linux home-directory conventions of each CLI.
+- Refresh granularity is 20 s; a window that just reset can take that long to show it.
+- Rate-limited vendors (HTTP 429) are hidden while another provider answers, and listed with their message when none does.
+- The panel reads the vendor endpoints these CLIs use; those are undocumented and may change without notice.
+- Linux and macOS are untested; credential paths follow each CLI's own home-directory convention.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
 
+---
+
+## En français
+
+**dsh-model-quota-panel** affiche tes quotas d'abonnement IA dans DeepSeek Harness : un anneau de progression juste à droite du compteur « contexte utilisé » du composeur, et un panneau au clic identique, en design, à celui du contexte.
+
+- Tous les quotas sont affichés en **progressif** (consommation) : `0 %` = intact, `100 %` = épuisé. Codex affiche pour sa part le *restant*, d'où l'inversion.
+- **Autant de comptes que tu veux** par fournisseur : chaque entrée `providers` du profil devient une carte.
+- Supportés : OpenCode Go, Codex, Claude (OAuth), MiniMax (coding plan), Z.ai, OpenRouter, GitHub Copilot, Moonshot. Les fournisseurs sans API de quota (Perplexity, Gemini, Mistral, Groq, Cerebras, NVIDIA) ne sont pas affichés.
+- Une seule ligne à adapter après installation : `QUOTAS_FILE` dans `client.js`.

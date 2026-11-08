@@ -11,6 +11,9 @@ It never invents a number: every value comes from the vendor's own usage endpoin
 - **One card per connected subscription**, active provider first, reset countdowns included.
 - **Silent about noise**: providers without a quota API, or not connected, never appear.
 
+## Multiple accounts
+
+Provider instances are discovered from the profile's `llm-pi-ai` provider map, so any number of accounts per vendor works: a second OpenCode Go subscription added as `opencode-go-2` with its own `apiKeyEnv` is reported as its own card, named after its `displayName`. The meter and the panel header always follow the provider id of the model the open conversation uses, then fall back to its provider family.
 ## Supported providers
 
 | Provider | Endpoint used | Notes |

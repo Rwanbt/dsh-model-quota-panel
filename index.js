@@ -5,6 +5,10 @@
  * through the built-in `api/file` route, because the desktop shell forwards
  * requests to a plugin's own web routes but never delivers their responses.
  *
+ * Provider instances are discovered from the profile's `llm-pi-ai` provider
+ * map, so any number of accounts works: two OpenCode Go subscriptions, a custom
+ * Anthropic account, and so on are each reported separately.
+ *
  * Every number comes from the vendor's own usage endpoint. A provider with no
  * quota API, or one that is not connected, is not published at all.
  */
@@ -22,13 +26,20 @@ const DSH_CREDENTIALS = () =>
   process.env.DSH_HOME && process.env.DSH_HOME !== ''
     ? join(process.env.DSH_HOME, '.credentials.yaml')
     : join(homedir(), '.dsh', '.credentials.yaml');
+const PROFILE_PATCH = () =>
+  process.env.DSH_HOME &&
+  process.env.DSH_PROFILE &&
+  process.env.DSH_HOME !== '' &&
+  process.env.DSH_PROFILE !== ''
+    ? join(process.env.DSH_HOME, 'profiles', process.env.DSH_PROFILE, 'cordis.patch.yml')
+    : null;
 
 export function apply(ctx) {
   const agentDefaultModel = ctx.get('agentDefaultModel');
 
   const publish = async () => {
     try {
-      const value = await collect(agentDefaultModel);
+      const value = await collect(ctx, agentDefaultModel);
       await writeFile(QUOTAS_PATH, JSON.stringify(value), 'utf8');
     } catch (error) {
       console.warn('[model-quota-panel] could not publish quotas.json:', error?.message);
@@ -39,6 +50,266 @@ export function apply(ctx) {
   const timer = setInterval(() => void publish(), PUBLISH_INTERVAL_MS);
   ctx.effect(() => () => clearInterval(timer), 'model-quota-panel: publisher');
 }
+
+/* ── provider discovery ───────────────────────────────────────────────── */
+
+/** `llm-pi-ai` provider map: id -> { apiKeyEnv, baseURL, displayName, api }. */
+async function providerInstances(ctx) {
+  const fromEditor = providersFromConfigEditor(ctx);
+  if (fromEditor !== null) return fromEditor;
+  return providersFromPatch();
+}
+
+function providersFromConfigEditor(ctx) {
+  try {
+    const editor = ctx.get('configEditor');
+    if (!editor || typeof editor.configuration !== 'function') return null;
+    const rows = editor.configuration();
+    if (!Array.isArray(rows)) return null;
+    let providers = null;
+    for (const row of rows) {
+      const entry = row?.entry ?? {};
+      const name = entry?.options?.name ?? entry?.name ?? row?.name ?? '';
+      if (name !== '@deepseek-ai/dsh-llm-pi-ai') continue;
+      const merged = {
+        ...(row?.inherited?.providers ?? {}),
+        ...(entry?.options?.config?.providers ?? {}),
+        ...(row?.override?.providers ?? {}),
+        ...(entry?.config?.providers ?? {}),
+      };
+      providers = { ...(providers ?? {}), ...merged };
+    }
+    return providers;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fallback for builds where `configEditor` is absent: a small reader for the
+ * `providers:` block of the active profile patch (two-level map, ignoring the
+ * nested `models:` lists).
+ */
+async function providersFromPatch() {
+  const file = PROFILE_PATCH();
+  if (!file) return {};
+  let text = '';
+  try {
+    text = await readFile(file, 'utf8');
+  } catch {
+    return {};
+  }
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((line) => /name:\s*'@deepseek-ai\/dsh-llm-pi-ai'/.test(line));
+  if (start < 0) return {};
+  const providers = {};
+  let current = null;
+  let inProviders = false;
+  for (let index = start + 1; index < lines.length; index++) {
+    const line = lines[index];
+    if (/^-\s/.test(line) || /^[A-Za-z]/.test(line)) break; // next top-level entry
+    if (/^\s{0,4}providers:\s*$/.test(line)) {
+      inProviders = true;
+      continue;
+    }
+    if (!inProviders) continue;
+    const header = line.match(/^\s{6}([A-Za-z0-9_.-]+):\s*$/);
+    if (header) {
+      current = header[1];
+      providers[current] = {};
+      continue;
+    }
+    if (current === null) continue;
+    const field = line.match(/^\s{8,}(apiKeyEnv|baseURL|displayName|api):\s*(.+?)\s*$/);
+    if (field) {
+      let value = field[2];
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      providers[current][field[1]] = value;
+    }
+  }
+  return providers;
+}
+
+function kindOfProvider(id, config) {
+  const hay = `${id} ${config?.displayName ?? ''} ${config?.baseURL ?? ''}`.toLowerCase();
+  if (hay.includes('opencode')) return 'opencode-go';
+  if (hay.includes('anthropic') || hay.includes('claude')) return 'anthropic';
+  if (hay.includes('codex')) return 'openai-codex';
+  if (hay.includes('minimax')) return 'minimax';
+  if (hay.includes('zai') || hay.includes('z.ai') || hay.includes('glm')) return 'zai';
+  if (hay.includes('copilot')) return 'github-copilot';
+  if (hay.includes('openrouter')) return 'openrouter';
+  if (hay.includes('moonshot') || hay.includes('kimi')) return 'moonshot';
+  if (config?.api === 'anthropic-messages') return 'anthropic';
+  return null;
+}
+
+const KIND_LABEL = {
+  'opencode-go': 'OpenCode Go',
+  anthropic: 'Claude',
+  'openai-codex': 'Codex (ChatGPT)',
+  minimax: 'MiniMax',
+  zai: 'Z.ai (GLM)',
+  'github-copilot': 'GitHub Copilot',
+  openrouter: 'OpenRouter',
+  moonshot: 'Moonshot / Kimi',
+};
+
+/** Provider id used by the quota payload for a model-provider id. */
+function kindOfModelProvider(provider) {
+  if (typeof provider !== 'string') return null;
+  if (provider.includes('opencode')) return 'opencode-go';
+  if (provider.includes('claude') || provider.includes('anthropic')) return 'anthropic';
+  if (provider.includes('codex')) return 'openai-codex';
+  if (provider.includes('minimax')) return 'minimax';
+  if (provider.includes('zai') || provider.includes('z.ai') || provider.includes('glm')) return 'zai';
+  if (provider.includes('copilot')) return 'github-copilot';
+  if (provider.includes('openrouter')) return 'openrouter';
+  if (provider.includes('moonshot') || provider.includes('kimi')) return 'moonshot';
+  return provider;
+}
+
+/* ── collection ───────────────────────────────────────────────────────── */
+
+async function collect(ctx, agentDefaultModel) {
+  const [refs, opencodeStore, configured] = await Promise.all([
+    dshRefs(),
+    opencodeAuth(),
+    providerInstances(ctx),
+  ]);
+  const active = readActiveSelection(agentDefaultModel);
+  const activeKind = kindOfModelProvider(active.provider);
+
+  const instances = Object.entries(configured)
+    .map(([id, config]) => ({ id, config: config ?? {}, kind: kindOfProvider(id, config ?? {}) }))
+    .filter((instance) => instance.kind !== null);
+
+  // Labels stay readable when several accounts share a provider.
+  const countByKind = {};
+  for (const instance of instances) countByKind[instance.kind] = (countByKind[instance.kind] ?? 0) + 1;
+  for (const instance of instances) {
+    const base = instance.config.displayName || KIND_LABEL[instance.kind] || instance.id;
+    instance.label = countByKind[instance.kind] > 1 ? `${base}` : base;
+  }
+
+  const entries = [];
+  for (const instance of instances) {
+    const exact = active.provider === instance.id;
+    const entry = await describeInstance(instance, { refs, opencodeStore, exact, activeKind });
+    if (entry) entries.push(entry);
+  }
+
+  // Credentials that live in the vendor CLI rather than the profile.
+  if (!instances.some((instance) => instance.kind === 'openai-codex')) {
+    const entry = await codexCliQuota(active, activeKind);
+    if (entry) entries.push(entry);
+  }
+  if (!instances.some((instance) => instance.kind === 'anthropic')) {
+    const entry = await claudeCliQuota(active, activeKind);
+    if (entry) entries.push(entry);
+  }
+
+  // Only providers that can actually report a quota are published, and while at
+  // least one works the transient failures stay out of the panel. When nothing
+  // works, the failures are published so the panel can say why it is empty.
+  const okEntries = entries.filter((entry) => entry.status === 'ok');
+  const visible = okEntries.length > 0 ? okEntries : entries.filter((entry) => entry.status === 'error');
+  visible.sort((a, b) => {
+    if (a.active !== b.active) return a.active ? -1 : 1;
+    return a.label.localeCompare(b.label);
+  });
+
+  return {
+    ok: okEntries.length > 0,
+    generatedAt: new Date().toISOString(),
+    active,
+    providers: visible,
+  };
+}
+
+async function describeInstance(instance, state) {
+  if (instance.kind === 'opencode-go') return opencodeQuota(instance, state);
+  if (instance.kind === 'anthropic') return anthropicQuota(instance, state);
+  if (instance.kind === 'openrouter') return openrouterQuota(instance, state);
+  if (instance.kind === 'zai') return zaiQuota(instance, state);
+  if (instance.kind === 'github-copilot') return copilotQuota(instance, state);
+  if (instance.kind === 'moonshot') return moonshotQuota(instance, state);
+  if (instance.kind === 'minimax') return minimaxQuota(instance, state);
+  if (instance.kind === 'openai-codex') return codexConfiguredQuota(instance, state);
+  return null;
+}
+
+function readActiveSelection(agentDefaultModel) {
+  let selection = null;
+  try {
+    selection = agentDefaultModel?.currentSelection?.() ?? null;
+  } catch (error) {
+    console.warn('[model-quota-panel] could not read the default model selection:', error?.message);
+  }
+  return {
+    provider: typeof selection?.provider === 'string' ? selection.provider : null,
+    model: typeof selection?.model === 'string' ? selection.model : null,
+  };
+}
+
+function entryBase(instance, state) {
+  return {
+    id: instance.id,
+    kind: instance.kind,
+    provider: instance.id,
+    label: instance.label,
+    plan: null,
+    windows: [],
+    active: state.exact === true || instance.kind === state.activeKind,
+    status: 'ok',
+    reason: null,
+  };
+}
+
+function pct(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function toIso(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return new Date(value > 1e12 ? value : value * 1000).toISOString();
+  }
+  if (typeof value === 'string' && value !== '') {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
+  }
+  return null;
+}
+
+/** Window label from the vendor's own window length (18000 s -> "Fenêtre 5 h"). */
+function windowLabel(seconds, fallback) {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return fallback;
+  if (seconds >= 7 * 86400) return 'Semaine';
+  if (seconds >= 86400) return `Fenêtre ${Math.round(seconds / 86400)} j`;
+  if (seconds >= 3600) return `Fenêtre ${Math.round(seconds / 3600)} h`;
+  return `Fenêtre ${Math.round(seconds / 60)} min`;
+}
+
+async function getJson(url, headers) {
+  const response = await fetch(url, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  const text = await response.text();
+  let body = null;
+  try {
+    body = text === '' ? null : JSON.parse(text);
+  } catch {
+    body = null;
+  }
+  if (!response.ok) {
+    const detail = body && (body.error?.message || body.msg || body.message);
+    throw new Error(`HTTP ${response.status}${detail ? ` — ${detail}` : ''}`);
+  }
+  if (body === null) throw new Error('réponse non JSON');
+  return body;
+}
+
 async function readJsonFile(path) {
   try {
     return JSON.parse(await readFile(path, 'utf8'));
@@ -47,7 +318,8 @@ async function readJsonFile(path) {
   }
 }
 
-/** Flat `NAME: value` entries of the DSH credential store's `refs:` block. */
+/* ── credentials ──────────────────────────────────────────────────────── */
+
 async function dshRefs() {
   const map = {};
   try {
@@ -79,113 +351,23 @@ async function opencodeAuth() {
   return (await readJsonFile(OPENCODE_AUTH())) ?? {};
 }
 
-/* ── collection ───────────────────────────────────────────────────────── */
-
-async function collect(agentDefaultModel) {
-  const [refs, opencode] = await Promise.all([dshRefs(), opencodeAuth()]);
-  const active = readActiveSelection(agentDefaultModel);
-  const activeKind = kindOf(active.provider);
-
-  const providers = [];
-  const push = (provider) => {
-    if (provider) providers.push(provider);
-  };
-
-  push(await opencodeGoQuota(refs, activeKind));
-  push(await codexQuota(activeKind));
-  push(await claudeQuota(activeKind));
-  push(await openrouterQuota(opencode, activeKind));
-  push(await zaiQuota(opencode, activeKind));
-  push(await copilotQuota(opencode, activeKind));
-  push(await moonshotQuota(refs, activeKind));
-  push(await minimaxQuota(refs, opencode, activeKind));
-
-  // Only providers that can actually report a quota are published, and while at
-  // least one works the transient failures stay out of the panel. When nothing
-  // works, the failures are published so the panel can say why it is empty.
-  const okProviders = providers.filter((provider) => provider.status === 'ok');
-  const visible = okProviders.length > 0 ? okProviders : providers.filter((provider) => provider.status === 'error');
-  visible.sort((a, b) => {
-    if (a.active !== b.active) return a.active ? -1 : 1;
-    return a.label.localeCompare(b.label);
-  });
-
-  return {
-    ok: visible.some((provider) => provider.status === 'ok'),
-    generatedAt: new Date().toISOString(),
-    active,
-    providers: visible,
-  };
-}
-
-function readActiveSelection(agentDefaultModel) {
-  let selection = null;
-  try {
-    selection = agentDefaultModel?.currentSelection?.() ?? null;
-  } catch (error) {
-    console.warn('[model-quota-panel] could not read the default model selection:', error?.message);
+function credentialFor(instance, state) {
+  const env = instance.config?.apiKeyEnv;
+  if (env) {
+    if (typeof state.refs[env] === 'string' && state.refs[env] !== '') return state.refs[env];
+    if (typeof process.env[env] === 'string' && process.env[env] !== '') return process.env[env];
   }
-  return {
-    provider: typeof selection?.provider === 'string' ? selection.provider : null,
-    model: typeof selection?.model === 'string' ? selection.model : null,
-  };
+  const store = state.opencodeStore ?? {};
+  return store[instance.id]?.key ?? store[instance.kind]?.key ?? null;
 }
 
-function kindOf(provider) {
-  if (typeof provider !== 'string') return null;
-  if (provider.includes('opencode')) return 'opencode-go';
-  if (provider.includes('claude')) return 'claude';
-  if (provider.includes('codex')) return 'openai-codex';
-  if (provider.includes('openrouter')) return 'openrouter';
-  if (provider.includes('zai') || provider.includes('z.ai') || provider.includes('glm')) return 'zai';
-  if (provider.includes('copilot')) return 'github-copilot';
-  if (provider.includes('moonshot') || provider.includes('kimi')) return 'moonshot';
-  return provider;
-}
+/* ── adapters ─────────────────────────────────────────────────────────── */
 
-function base(id, label, activeKind, extra = {}) {
-  return Object.assign({ id, label, plan: null, windows: [], active: id === activeKind, status: 'ok', reason: null }, extra);
-}
-
-function pct(value) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  return Math.max(0, Math.min(100, Math.round(value)));
-}
-
-function toIso(value) {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return new Date(value > 1e12 ? value : value * 1000).toISOString();
-  }
-  if (typeof value === 'string' && value !== '') {
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
-  }
-  return null;
-}
-
-async function getJson(url, headers) {
-  const response = await fetch(url, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-  const text = await response.text();
-  let body = null;
-  try {
-    body = text === '' ? null : JSON.parse(text);
-  } catch {
-    body = null;
-  }
-  if (!response.ok) {
-    const detail = body && (body.error?.message || body.msg || body.message);
-    throw new Error(`HTTP ${response.status}${detail ? ` — ${detail}` : ''}`);
-  }
-  if (body === null) throw new Error('réponse non JSON');
-  return body;
-}
-
-/* ── OpenCode Go ──────────────────────────────────────────────────────── */
-
-async function opencodeGoQuota(refs, activeKind) {
-  const key = refs.OPENCODE_GO_API_KEY ?? process.env.OPENCODE_GO_API_KEY ?? (await opencodeAuth())['opencode-go']?.key;
+async function opencodeQuota(instance, state) {
+  const entry = entryBase(instance, state);
+  const key = credentialFor(instance, state);
   if (!key) return null;
-  const entry = base('opencode-go', 'OpenCode Go', activeKind, { plan: 'Go' });
+  entry.plan = 'Go';
   try {
     const payload = await getJson('https://opencode.ai/inference/go/v1/usage', {
       authorization: `Bearer ${key}`,
@@ -193,8 +375,11 @@ async function opencodeGoQuota(refs, activeKind) {
       'anthropic-version': '2023-06-01',
     });
     const usage = payload?.usage ?? {};
-    const labels = { rolling: 'Fenêtre glissante', weekly: 'Semaine', monthly: 'Mois' };
-    for (const [key2, label] of Object.entries(labels)) {
+    for (const [key2, label] of [
+      ['rolling', 'Fenêtre glissante'],
+      ['weekly', 'Semaine'],
+      ['monthly', 'Mois'],
+    ]) {
       const window = usage[key2];
       if (!window || typeof window.percent !== 'number') continue;
       entry.windows.push({ label, usedPct: pct(window.percent), resetsAt: toIso(window.resetsAt) });
@@ -209,24 +394,69 @@ async function opencodeGoQuota(refs, activeKind) {
   }
 }
 
-/* ── Codex (ChatGPT) ──────────────────────────────────────────────────── */
-
-/** Window label from the vendor's own window length (18000 s -> "Fenêtre 5 h"). */
-function codexWindowLabel(seconds, fallback) {
-  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return fallback;
-  if (seconds >= 7 * 86400) return 'Semaine';
-  if (seconds >= 86400) return `Fenêtre ${Math.round(seconds / 86400)} j`;
-  if (seconds >= 3600) return `Fenêtre ${Math.round(seconds / 3600)} h`;
-  return `Fenêtre ${Math.round(seconds / 60)} min`;
+async function anthropicQuota(instance, state) {
+  const entry = entryBase(instance, state);
+  let key = credentialFor(instance, state);
+  const oauth = state.opencodeStore?.anthropic?.key ?? state.opencodeStore?.claude?.key ?? null;
+  if (!key) key = oauth;
+  if (!key) return null;
+  try {
+    // An OAuth access token answers the subscription-usage endpoint; a plain API
+    // key has no quota API at all.
+    if (!key.startsWith('sk-ant-oat')) {
+      if (!key.startsWith('sk-ant-')) throw new Error('clé API : pas d’API de quota');
+      entry.status = 'unavailable';
+      entry.reason = 'Clé API Anthropic : pas d’API de quota';
+      return entry;
+    }
+    const usage = await getJson('https://api.anthropic.com/api/oauth/usage', {
+      authorization: `Bearer ${key}`,
+      'anthropic-beta': 'oauth-2025-04-20',
+    });
+    for (const [key2, label] of [['five_hour', 'Fenêtre 5 h'], ['seven_day', 'Semaine']]) {
+      const window = usage?.[key2];
+      if (!window || typeof window.utilization !== 'number') continue;
+      entry.windows.push({ label, usedPct: pct(window.utilization), resetsAt: toIso(window.resets_at) });
+    }
+    if (entry.windows.length === 0) {
+      entry.status = 'unavailable';
+      entry.reason = 'Aucune fenêtre renvoyée par Anthropic';
+    }
+    return entry;
+  } catch (error) {
+    return Object.assign(entry, { status: 'error', reason: error.message });
+  }
 }
 
-async function codexQuota(activeKind) {
-  const entry = base('openai-codex', 'Codex (ChatGPT)', activeKind);
+async function codexConfiguredQuota(instance, state) {
+  const entry = entryBase(instance, state);
   const auth = await readJsonFile(join(homedir(), '.codex', 'auth.json'));
   const token = auth?.tokens?.access_token;
   if (typeof token !== 'string' || token === '') {
     return Object.assign(entry, { status: 'unavailable', reason: 'Connexion Codex absente (lance `codex login`)' });
   }
+  return codexUsage(entry, auth, token);
+}
+
+async function codexCliQuota(active, activeKind) {
+  const auth = await readJsonFile(join(homedir(), '.codex', 'auth.json'));
+  const token = auth?.tokens?.access_token;
+  if (typeof token !== 'string' || token === '') return null;
+  const entry = {
+    id: 'openai-codex',
+    kind: 'openai-codex',
+    provider: 'openai-codex',
+    label: KIND_LABEL['openai-codex'],
+    plan: null,
+    windows: [],
+    active: active.provider === 'openai-codex' || activeKind === 'openai-codex',
+    status: 'ok',
+    reason: null,
+  };
+  return codexUsage(entry, auth, token);
+}
+
+async function codexUsage(entry, auth, token) {
   try {
     const headers = { authorization: `Bearer ${token}` };
     if (typeof auth?.tokens?.account_id === 'string') headers['chatgpt-account-id'] = auth.tokens.account_id;
@@ -235,9 +465,8 @@ async function codexQuota(activeKind) {
     for (const [key, fallback] of [['primary_window', 'Fenêtre courte'], ['secondary_window', 'Semaine']]) {
       const window = limit?.[key];
       if (!window || typeof window.used_percent !== 'number') continue;
-      const seconds = window.limit_window_seconds;
       entry.windows.push({
-        label: codexWindowLabel(seconds, fallback),
+        label: windowLabel(window.limit_window_seconds, fallback),
         // The API field is the consumed percentage, so the bar grows with use.
         usedPct: pct(window.used_percent),
         resetsAt: toIso(window.reset_at),
@@ -254,15 +483,21 @@ async function codexQuota(activeKind) {
   }
 }
 
-/* ── Claude Code ──────────────────────────────────────────────────────── */
-
-async function claudeQuota(activeKind) {
-  const entry = base('claude', 'Claude Code', activeKind);
+async function claudeCliQuota(active, activeKind) {
   const credentials = await readJsonFile(join(homedir(), '.claude', '.credentials.json'));
   const oauth = credentials?.claudeAiOauth;
-  if (typeof oauth?.accessToken !== 'string' || oauth.accessToken === '') {
-    return Object.assign(entry, { status: 'unavailable', reason: 'Connexion Claude absente (lance `claude`, puis /login)' });
-  }
+  if (typeof oauth?.accessToken !== 'string' || oauth.accessToken === '') return null;
+  const entry = {
+    id: 'claude',
+    kind: 'anthropic',
+    provider: 'claude',
+    label: 'Claude Code',
+    plan: typeof oauth.subscriptionType === 'string' ? oauth.subscriptionType : null,
+    windows: [],
+    active: active.provider === 'claude' || activeKind === 'anthropic',
+    status: 'ok',
+    reason: null,
+  };
   try {
     const usage = await getJson('https://api.anthropic.com/api/oauth/usage', {
       authorization: `Bearer ${oauth.accessToken}`,
@@ -273,7 +508,6 @@ async function claudeQuota(activeKind) {
       if (!window || typeof window.utilization !== 'number') continue;
       entry.windows.push({ label, usedPct: pct(window.utilization), resetsAt: toIso(window.resets_at) });
     }
-    entry.plan = typeof oauth.subscriptionType === 'string' ? oauth.subscriptionType : null;
     if (entry.windows.length === 0) {
       entry.status = 'unavailable';
       entry.reason = 'Aucune fenêtre renvoyée par Anthropic';
@@ -284,12 +518,10 @@ async function claudeQuota(activeKind) {
   }
 }
 
-/* ── OpenRouter ───────────────────────────────────────────────────────── */
-
-async function openrouterQuota(opencode, activeKind) {
-  const key = opencode?.openrouter?.key;
+async function openrouterQuota(instance, state) {
+  const key = credentialFor(instance, state);
   if (!key) return null;
-  const entry = base('openrouter', 'OpenRouter', activeKind);
+  const entry = entryBase(instance, state);
   try {
     const payload = await getJson('https://openrouter.ai/api/v1/key', { authorization: `Bearer ${key}` });
     const data = payload?.data ?? {};
@@ -297,13 +529,10 @@ async function openrouterQuota(opencode, activeKind) {
     const usage = typeof data.usage === 'number' ? data.usage : null;
     if (limit !== null && limit > 0 && usage !== null) {
       entry.windows.push({ label: 'Crédit', usedPct: pct((usage / limit) * 100), resetsAt: null });
-    } else if (usage !== null) {
-      entry.windows.push({ label: 'Consommé', usedPct: null, resetsAt: null, note: `$${usage.toFixed(2)} consommés (pas de plafond)` });
     }
-    if (typeof data.limit_remaining === 'number') entry.note = `$${data.limit_remaining.toFixed(2)} restants`;
     if (entry.windows.length === 0) {
       entry.status = 'unavailable';
-      entry.reason = 'Aucune donnée de crédit renvoyée par OpenRouter';
+      entry.reason = 'Aucun plafond de crédit sur cette clé OpenRouter';
     }
     return entry;
   } catch (error) {
@@ -311,12 +540,10 @@ async function openrouterQuota(opencode, activeKind) {
   }
 }
 
-/* ── Z.ai (GLM coding plan) ───────────────────────────────────────────── */
-
-async function zaiQuota(opencode, activeKind) {
-  const key = opencode?.zai?.key;
+async function zaiQuota(instance, state) {
+  const key = credentialFor(instance, state);
   if (!key) return null;
-  const entry = base('zai', 'Z.ai (GLM)', activeKind);
+  const entry = entryBase(instance, state);
   try {
     const payload = await getJson('https://api.z.ai/api/monitor/usage/quota/limit', {
       authorization: `Bearer ${key}`,
@@ -350,12 +577,10 @@ async function zaiQuota(opencode, activeKind) {
   }
 }
 
-/* ── GitHub Copilot ───────────────────────────────────────────────────── */
-
-async function copilotQuota(opencode, activeKind) {
-  const token = opencode?.['github-copilot']?.access;
+async function copilotQuota(instance, state) {
+  const token = credentialFor(instance, state);
   if (!token) return null;
-  const entry = base('github-copilot', 'GitHub Copilot', activeKind);
+  const entry = entryBase(instance, state);
   try {
     const exchange = await getJson('https://api.github.com/copilot_internal/v2/token', {
       authorization: `token ${token}`,
@@ -372,10 +597,8 @@ async function copilotQuota(opencode, activeKind) {
     const snapshots = usage?.quota_snapshots ?? {};
     for (const [key, label] of [['chat', 'Chat'], ['completions', 'Complétions'], ['premium_interactions', 'Premium']]) {
       const snapshot = snapshots[key];
-      if (!snapshot) continue;
-      const remaining = snapshot.percent_remaining;
-      if (typeof remaining !== 'number') continue;
-      entry.windows.push({ label, usedPct: pct(100 - remaining), resetsAt: toIso(snapshot.quota_reset_at) });
+      if (!snapshot || typeof snapshot.percent_remaining !== 'number') continue;
+      entry.windows.push({ label, usedPct: pct(100 - snapshot.percent_remaining), resetsAt: toIso(snapshot.quota_reset_at) });
     }
     entry.plan = typeof usage?.copilot_plan === 'string' ? usage.copilot_plan : null;
     if (entry.windows.length === 0) {
@@ -388,35 +611,32 @@ async function copilotQuota(opencode, activeKind) {
   }
 }
 
-/* ── Moonshot / Kimi ──────────────────────────────────────────────────── */
-async function moonshotQuota(refs, activeKind) {
-  const key = refs.MOONSHOT_API_KEY ?? process.env.MOONSHOT_API_KEY;
+async function moonshotQuota(instance, state) {
+  const key = credentialFor(instance, state);
   if (!key) return null;
-  const entry = base('moonshot', 'Moonshot / Kimi', activeKind);
+  const entry = entryBase(instance, state);
   try {
     const payload = await getJson('https://api.moonshot.cn/v1/users/me/balance', {
       authorization: `Bearer ${key}`,
     });
-    const data = payload?.data ?? {};
-    const balance = data.available_balance;
-    if (typeof balance === 'number') {
-      entry.windows.push({ label: 'Solde', usedPct: null, resetsAt: null, note: `¥${balance.toFixed(2)} disponibles` });
+    const balance = payload?.data?.available_balance;
+    if (typeof balance !== 'number') {
+      entry.status = 'unavailable';
+      entry.reason = 'Aucun solde renvoyé par Moonshot';
       return entry;
     }
     entry.status = 'unavailable';
-    entry.reason = 'Aucun solde renvoyé par Moonshot';
+    entry.reason = `Solde : ¥${balance.toFixed(2)}`;
     return entry;
   } catch (error) {
     return Object.assign(entry, { status: 'error', reason: error.message });
   }
 }
 
-/* ── MiniMax (coding / token plan) ────────────────────────────────────── */
-
-async function minimaxQuota(refs, opencode, activeKind) {
-  const key = refs.MINIMAX_API_KEY ?? process.env.MINIMAX_API_KEY ?? opencode?.['minimax-coding-plan']?.key;
+async function minimaxQuota(instance, state) {
+  const key = credentialFor(instance, state);
   if (!key) return null;
-  const entry = base('minimax', 'MiniMax', activeKind);
+  const entry = entryBase(instance, state);
   try {
     const payload = await getJson('https://api.minimax.io/v1/coding_plan/remains', {
       authorization: `Bearer ${key}`,
@@ -436,11 +656,10 @@ async function minimaxQuota(refs, opencode, activeKind) {
       return entry;
     }
     if (typeof model.model === 'string') entry.plan = model.model;
-    const pairs = [
+    for (const [label, used, total, resetsAt] of [
       ['Intervalle', model.current_interval_usage_count, model.current_interval_total_count, model.end_time],
       ['Semaine', model.current_weekly_usage_count, model.current_weekly_total_count, model.weekly_end_time],
-    ];
-    for (const [label, used, total, resetsAt] of pairs) {
+    ]) {
       if (typeof used !== 'number' || typeof total !== 'number' || total <= 0) continue;
       entry.windows.push({ label, usedPct: pct((used / total) * 100), resetsAt: toIso(resetsAt) });
     }
@@ -453,7 +672,3 @@ async function minimaxQuota(refs, opencode, activeKind) {
     return Object.assign(entry, { status: 'error', reason: error.message });
   }
 }
-
-
-
-

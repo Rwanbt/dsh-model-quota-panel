@@ -164,7 +164,7 @@ window.__ModuleLoader__.load({
     function kindOf(provider) {
       if (typeof provider !== 'string') return null;
       if (provider.includes('opencode')) return 'opencode-go';
-      if (provider.includes('claude')) return 'claude';
+      if (provider.includes('claude') || provider.includes('anthropic')) return 'anthropic';
       if (provider.includes('codex')) return 'openai-codex';
       if (provider.includes('minimax')) return 'minimax';
       if (provider.includes('zai') || provider.includes('z.ai') || provider.includes('glm')) return 'zai';
@@ -197,11 +197,20 @@ window.__ModuleLoader__.load({
       return null;
     }
 
+    /**
+     * The card of the Session's model: an exact provider instance first (two
+     * OpenCode Go accounts are two distinct provider ids), then its kind.
+     */
     function activeProvider(data) {
       const list = shownProviders(data);
-      if (selectionValue && selectionValue.provider) {
-        const kind = kindOf(selectionValue.provider);
-        const match = list.find((provider) => provider.id === kind);
+      const selection = selectionValue;
+      if (selection && selection.provider) {
+        const exact = list.find(
+          (provider) => provider.provider === selection.provider || provider.id === selection.provider,
+        );
+        if (exact) return exact;
+        const kind = kindOf(selection.provider);
+        const match = list.find((provider) => provider.kind === kind);
         if (match) return match;
       }
       return list.find((provider) => provider.active) ?? list.find((provider) => worstPercent(provider) !== null) ?? null;
@@ -411,7 +420,7 @@ window.__ModuleLoader__.load({
                           }),
                           window.label),
                         h('dd', null,
-                          window.usedPct + ' %',
+                          window.usedPct + ' % · reste ' + Math.max(0, 100 - window.usedPct) + ' %',
                           formatReset(window.resetsAt)
                             ? h('span', { className: 'mqp_reset' }, ' · ' + formatReset(window.resetsAt))
                             : null)))

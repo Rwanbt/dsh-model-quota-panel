@@ -1,6 +1,11 @@
 # dsh-model-quota-panel
 
 ![ci](https://github.com/Rwanbt/dsh-model-quota-panel/actions/workflows/ci.yml/badge.svg)
+![version](https://img.shields.io/badge/version-1.8.0-blue)
+![status](https://img.shields.io/badge/status-stable-success)
+![license](https://img.shields.io/badge/license-MIT-green)
+
+**Status: stable.** Released as `v1.8.0`; see [CHANGELOG.md](CHANGELOG.md) for the history. Interfaces, payload shape and file layout are frozen for the 1.x line — new providers and locales are additive.
 
 A [DeepSeek Harness](https://www.deepseek.com/en/harness/) plugin that puts **your AI subscription quotas** where you actually write.
 
@@ -163,7 +168,7 @@ npm run check   # node --check on both bundle halves
 | `test/cost.test.js` | i18n completeness and placeholders, currency conversion and formatting, token pricing, per-model session folding across model switches |
 | `test/security.test.js` | fails the build on any credential-shaped string, personal absolute path, or tracked runtime artefact |
 
-`.github/workflows/ci.yml` runs that suite on **ubuntu, windows and macos** with **Node 20 and 22**, plus the syntax check. See [SECURITY.md](SECURITY.md) for the security model.
+`.github/workflows/ci.yml` runs that suite on **ubuntu, windows and macos** with **Node 20 and 22**, plus the syntax check. See [SECURITY.md](SECURITY.md) for the security model and [CHANGELOG.md](CHANGELOG.md) for the release history.
 ## Limitations
 
 - Refresh granularity is 20 s; a window that just reset can take that long to show it.

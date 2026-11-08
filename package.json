@@ -10,7 +10,7 @@
     "url": "https://github.com/Rwanbt/dsh-model-quota-panel.git"
   },
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test",
     "check": "node --check index.js && node --check client.js"
   },
   "exports": {

@@ -25,4 +25,4 @@ jobs:
       - name: Syntax check the bundle halves
         run: node --check index.js && node --check client.js
       - name: Unit tests
-        run: node --test test/
+        run: node --test

@@ -126,7 +126,7 @@ Why a file instead of an endpoint: the desktop shell forwards requests to a plug
 The repository ships a deterministic, dependency-free suite (Node's built-in runner): **33 tests**, no network, no fixtures to refresh.
 
 ```sh
-npm test        # node --test test/
+npm test        # node --test
 npm run check   # node --check on both bundle halves
 ```
 

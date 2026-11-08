@@ -429,6 +429,7 @@ window.__ModuleLoader__.load({
           lastKey = key;
           selectionValue = selection;
           patch({});
+
         };
         syncSelection();
         const selectionPoll = setInterval(syncSelection, 2000);
@@ -451,5 +452,7 @@ window.__ModuleLoader__.load({
     };
   },
 });
+
+
 
 

@@ -23,9 +23,21 @@ window.__ModuleLoader__.load({
     const PANEL_WIDTH = 264;
     const RADIUS = 5.5;
     const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
-    /** Absolute path of the snapshot published by the Host (index.js).
-     *  Change this single line if the plugin lives in another directory. */
+    /**
+     * Absolute path of the snapshot published by the Host (index.js). The Host
+     * injects it into the page for the current install (any OS, any directory);
+     * the literal is only the fallback for an environment that dropped the
+     * injection, and can be edited for a fixed deployment.
+     */
+    const INJECTED_QUOTAS_FILE =
+      typeof window !== 'undefined' &&
+      window.__MODEL_QUOTA_PANEL__ &&
+      typeof window.__MODEL_QUOTA_PANEL__.path === 'string' &&
+      window.__MODEL_QUOTA_PANEL__.path !== ''
+        ? window.__MODEL_QUOTA_PANEL__.path
+        : null;
     const QUOTAS_FILE =
+      INJECTED_QUOTAS_FILE ??
       'C:/Users/barat/Documents/deepseek-harness/default-workspace/model-quota-plugin/quotas.json';
 
     /* ── styles: same values as ui-conversation ContextMeter.module.css ── */

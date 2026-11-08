@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-quota-panel",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "DeepSeek Harness plugin: subscription quota meter and panel for the models you use (OpenCode Go, Codex, Claude, MiniMax, Z.ai, OpenRouter, GitHub Copilot, Moonshot).",
   "type": "module",
   "license": "MIT",

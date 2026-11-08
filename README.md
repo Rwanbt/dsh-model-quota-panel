@@ -82,16 +82,23 @@ git clone https://github.com/Rwanbt/dsh-model-quota-panel.git
 
 Then, in a DSH session of the profile you use: **Plugins → Add plugin**, pick the cloned directory (or use `plugin_manager` / `dsh plugin --profile <name> add link:<absolute path>`), and enable the bundle. It needs DeepSeek Harness 0.2.2-rc.1 (Web or Desktop).
 
-### The one line to check
+### No path to configure
 
-The Host half publishes a snapshot as `quotas.json` next to `index.js`, and the browser half reads it through DSH's built-in `api/file` route, which requires an absolute path. Edit the constant near the top of [`client.js`](client.js):
+The Host half publishes a snapshot as `quotas.json` next to `index.js`, and the browser half reads it through DSH's built-in `api/file` route, which needs an absolute path. The Host injects that path into the page at boot (`window.__MODEL_QUOTA_PANEL__.path`), so a clone works from any directory, on any OS, with no editing.
 
-```js
-const QUOTAS_FILE =
-  'C:/Users/you/path/to/dsh-model-quota-panel/quotas.json';
-```
+If your environment ever drops that index injection, the literal `QUOTAS_FILE` near the top of [`client.js`](client.js) is the fallback; set it to the absolute path of `quotas.json` for your install.
 
-Nothing else needs configuring.
+## Compatibility
+
+| OS | Status | Notes |
+| --- | --- | --- |
+| **Windows** | tested | path injected at boot, no manual configuration |
+| **Linux** | supported | same code path; credentials follow XDG (`$XDG_DATA_HOME`), `~/.local/share`, `~/.dsh` |
+| **macOS** | supported, untested | also probes `~/Library/Application Support/opencode/auth.json` for the OpenCode CLI |
+
+Nothing in the bundle is OS-specific: the Host uses `node:os`/`node:path`/`node:url` only, and the browser half never hard-codes a filesystem path when the injection is present. Requires DeepSeek Harness 0.2.2-rc.1 (Web or Desktop) and Node.js 20+ (for `fetch` and `AbortSignal.timeout`, both provided by the DSH runtime).
+
+Credentials are read from the same places on every OS: `~/.codex/auth.json`, `~/.claude/.credentials.json`, the OpenCode data directory, and `<DSH_HOME>/.credentials.yaml`.
 
 ## How it works
 
@@ -132,4 +139,4 @@ MIT — see [LICENSE](LICENSE).
 - Tous les quotas sont affichés en **progressif** (consommation) : `0 %` = intact, `100 %` = épuisé. Codex affiche pour sa part le *restant*, d'où l'inversion.
 - **Autant de comptes que tu veux** par fournisseur : chaque entrée `providers` du profil devient une carte.
 - Supportés : OpenCode Go, Codex, Claude (OAuth), MiniMax (coding plan), Z.ai, OpenRouter, GitHub Copilot, Moonshot. Les fournisseurs sans API de quota (Perplexity, Gemini, Mistral, Groq, Cerebras, NVIDIA) ne sont pas affichés.
-- Une seule ligne à adapter après installation : `QUOTAS_FILE` dans `client.js`.
+- **Aucune configuration** : le Host injecte le chemin absolu de son instantané au démarrage, quel que soit l'OS ou le dossier d'installation. Compatible Windows (testé), Linux et macOS (supporté).

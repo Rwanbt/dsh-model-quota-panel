@@ -22,7 +22,14 @@ const REQUEST_TIMEOUT_MS = 12_000;
 const PUBLISH_INTERVAL_MS = 20_000;
 const QUOTAS_PATH = new URL('./quotas.json', import.meta.url);
 
-const OPENCODE_AUTH = () => join(homedir(), '.local', 'share', 'opencode', 'auth.json');
+/** OpenCode stores its CLI credentials in a per-OS data directory. */
+const OPENCODE_AUTH_CANDIDATES = () => {
+  const candidates = [];
+  if (process.env.XDG_DATA_HOME) candidates.push(join(process.env.XDG_DATA_HOME, 'opencode', 'auth.json'));
+  candidates.push(join(homedir(), '.local', 'share', 'opencode', 'auth.json'));
+  candidates.push(join(homedir(), 'Library', 'Application Support', 'opencode', 'auth.json'));
+  return candidates;
+};
 const DSH_CREDENTIALS = () =>
   process.env.DSH_HOME && process.env.DSH_HOME !== ''
     ? join(process.env.DSH_HOME, '.credentials.yaml')
@@ -35,8 +42,33 @@ const PROFILE_PATCH = () =>
     ? join(process.env.DSH_HOME, 'profiles', process.env.DSH_PROFILE, 'cordis.patch.yml')
     : null;
 
+export const inject = ['webServer'];
+
 export function apply(ctx) {
   const agentDefaultModel = ctx.get('agentDefaultModel');
+  const webServer = ctx.get('webServer');
+  const snapshotPath = fileURLToPath(QUOTAS_PATH);
+
+  // Hand the browser half its own absolute snapshot path, so a fresh install on
+  // any OS needs no hand-edited constant. The page reads it from a tiny index
+  // injection (the same channel DSH uses for its own boot payload).
+  if (webServer && typeof webServer.tapIndex === 'function') {
+    ctx.effect(
+      () =>
+        webServer.tapIndex((html) => {
+          try {
+            const payload = JSON.stringify({ path: snapshotPath }).replace(/</g, '\\u003c');
+            const script = `<script>window.__MODEL_QUOTA_PANEL__=${payload}</script>`;
+            return typeof html === 'string' && html.includes('</head>')
+              ? html.replace('</head>', `${script}</head>`)
+              : `${script}${String(html ?? '')}`;
+          } catch (error) {
+            return html;
+          }
+        }),
+      'model-quota-panel: index snapshot path',
+    );
+  }
 
   const publish = async () => {
     try {
@@ -420,7 +452,11 @@ async function dshRefs() {
 }
 
 async function opencodeAuth() {
-  return (await readJsonFile(OPENCODE_AUTH())) ?? {};
+  for (const candidate of OPENCODE_AUTH_CANDIDATES()) {
+    const value = await readJsonFile(candidate);
+    if (value && typeof value === 'object') return value;
+  }
+  return {};
 }
 
 function credentialFor(instance, state) {

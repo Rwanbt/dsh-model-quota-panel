@@ -43,21 +43,22 @@ window.__ModuleLoader__.load({
       'panel.unavailable': 'Quota data unavailable',
     };
 
-    const USER_LOCALE = (() => {
-      try {
-        const requested = (globalThis.navigator && globalThis.navigator.language) || 'en';
-        const primary = String(requested).toLowerCase().split(/[-_]/)[0];
-        return SUPPORTED_LOCALES.includes(primary) ? primary : 'en';
-      } catch (error) {
-        return 'en';
-      }
-    })();
+    /** Locale reported by the Host (its OS locale), else the browser, else English. */
+    function activeLocale(data) {
+      const candidate =
+        (data && typeof data.locale === 'string' && data.locale) ||
+        (globalThis.navigator && globalThis.navigator.language) ||
+        'en';
+      const primary = String(candidate).toLowerCase().split(/[-_]/)[0];
+      return SUPPORTED_LOCALES.includes(primary) ? primary : 'en';
+    }
 
     /** Translate a key with the dictionaries the Host published. */
     function translate(data, key, params) {
       const messages = data && data.messages;
+      const locale = activeLocale(data);
       const template =
-        (messages && messages[USER_LOCALE] && messages[USER_LOCALE][key]) ||
+        (messages && messages[locale] && messages[locale][key]) ||
         (messages && messages.en && messages.en[key]) ||
         FALLBACK_MESSAGES[key] ||
         key;
@@ -68,9 +69,10 @@ window.__ModuleLoader__.load({
     }
 
     /** Local currency implied by the browser locale. */
-    function displayCurrency() {
+    function displayCurrency(data) {
+      if (data && typeof data.currency === 'string' && data.currency !== '') return data.currency;
       try {
-        const tag = (globalThis.navigator && globalThis.navigator.language) || 'en-US';
+        const tag = (data && data.locale) || (globalThis.navigator && globalThis.navigator.language) || 'en-US';
         const region = String(tag).split(/[-_]/)[1];
         if (region && REGION_CURRENCY[region.toUpperCase()]) return REGION_CURRENCY[region.toUpperCase()];
       } catch (error) {
@@ -81,13 +83,13 @@ window.__ModuleLoader__.load({
 
     /** Format a USD amount in the user's currency and locale. */
     function money(usd, data) {
-      const currency = displayCurrency();
+      const currency = displayCurrency(data);
       const rates = data && data.fx && data.fx.rates;
       const rate = currency === 'USD' ? 1 : rates && typeof rates[currency] === 'number' ? rates[currency] : 1;
       const amount = (Number.isFinite(usd) ? usd : 0) * rate;
       const digits = amount !== 0 && Math.abs(amount) < 1 ? 4 : 2;
       try {
-        return new Intl.NumberFormat(USER_LOCALE, {
+        return new Intl.NumberFormat(activeLocale(data), {
           style: 'currency',
           currency,
           minimumFractionDigits: Math.min(2, digits),
@@ -301,7 +303,7 @@ window.__ModuleLoader__.load({
       if (!provider || provider.stale !== true || !provider.updatedAt) return undefined;
       const at = new Date(provider.updatedAt);
       if (Number.isNaN(at.getTime())) return undefined;
-      return translate(data, 'panel.stale', { time: at.toLocaleTimeString(USER_LOCALE, { hour: '2-digit', minute: '2-digit' }) });
+      return translate(data, 'panel.stale', { time: at.toLocaleTimeString(activeLocale(data), { hour: '2-digit', minute: '2-digit' }) });
     }
 
     function worstPercent(provider) {

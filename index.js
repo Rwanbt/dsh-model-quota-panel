@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 import { parseProvidersPatch, parseRefs } from './lib/config.js';
 import { MESSAGES } from './lib/i18n.js';
-import { PRICES } from './lib/prices.js';
+import { PRICES, currencyForLocale, SUPPORTED_CURRENCIES } from './lib/prices.js';
 import { foldSessionCost } from './lib/session-cost.js';
 import { pct, toIso, windowLabel } from './lib/format.js';
 import {
@@ -69,7 +69,35 @@ const STALE_MAX_MS = 20 * 60_000;
 
 export const inject = ['webServer'];
 
-export function apply(ctx) {
+/** Locale the user's machine reports, independent of the app bundle. */
+function osLocale() {
+  try {
+    const locale = Intl.DateTimeFormat().resolvedOptions().locale;
+    if (typeof locale === 'string' && locale !== '') return locale;
+  } catch {
+    // fall through
+  }
+  const env = process.env.LC_ALL || process.env.LC_MESSAGES || process.env.LANG || '';
+  const match = /^([a-z]{2,3}(?:[_-][A-Za-z0-9]{2,8})?)/.exec(env);
+  return match ? match[1].replace('_', '-') : 'en-US';
+}
+
+/**
+ * Locale and currency the panel should use: explicit plugin config first, then
+ * the operating system's locale, then the currency that locale implies.
+ */
+function displayPreferences(config) {
+  const requestedLocale = typeof config?.locale === 'string' && config.locale !== '' ? config.locale : osLocale();
+  const implied = currencyForLocale(requestedLocale);
+  const requestedCurrency =
+    typeof config?.currency === 'string' && SUPPORTED_CURRENCIES.includes(config.currency.toUpperCase())
+      ? config.currency.toUpperCase()
+      : implied;
+  return { locale: requestedLocale, currency: requestedCurrency, source: typeof config?.locale === 'string' ? 'config' : 'os' };
+}
+
+export function apply(ctx, config) {
+  const preferences = displayPreferences(config);
   const agentDefaultModel = ctx.get('agentDefaultModel');
   const webServer = ctx.get('webServer');
   const snapshotPath = fileURLToPath(QUOTAS_PATH);
@@ -105,7 +133,7 @@ export function apply(ctx) {
           path: '/api/model-quota',
           methods: ['GET'],
           fetch: async () => {
-            const value = await collect(ctx, agentDefaultModel);
+            const value = await collect(ctx, agentDefaultModel, preferences);
             return new Response(JSON.stringify(value), {
               headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
             });
@@ -314,7 +342,7 @@ async function fxRates() {
 
 /* ── collection ───────────────────────────────────────────────────────── */
 
-async function collect(ctx, agentDefaultModel) {
+async function collect(ctx, agentDefaultModel, preferences = displayPreferences(null)) {
   const [refs, opencodeStore, configured] = await Promise.all([
     dshRefs(),
     opencodeAuth(),
@@ -363,6 +391,9 @@ async function collect(ctx, agentDefaultModel) {
     active,
     providers: visible,
     messages: MESSAGES,
+    locale: preferences.locale,
+    currency: preferences.currency,
+    localeSource: preferences.source,
     prices: PRICES,
     fx: { base: 'USD', rates, at: new Date(fxCache.at).toISOString() },
     session,

@@ -5,3 +5,4 @@ debug.json
 boot.log
 .DS_Store
 assets/
+session-debug.log

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const IGNORED_DIRECTORIES = new Set(['.git', 'node_modules', 'test']);
-const SDK_ONLY_FILES = new Set(['quotas.json', 'boot.log', 'debug.json']);
+const SDK_ONLY_FILES = new Set(['quotas.json', 'boot.log', 'debug.json', 'session-debug.log']);
 const IGNORED_ASSET_DIRECTORY = 'assets';
 
 /** Every source file the repository tracks (the test suite excluded). */

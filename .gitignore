@@ -1,0 +1,6 @@
+node_modules/
+*.log
+quotas.json
+debug.json
+boot.log
+.DS_Store

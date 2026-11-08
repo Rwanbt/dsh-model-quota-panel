@@ -1,0 +1,3 @@
+- insert:
+    - id: model-quota-panel
+      name: '@local/model-quota-panel'

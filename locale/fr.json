@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Quotas d'abonnement",
+    "description": "Compteur de quotas d'abonnement à côté du compteur de contexte : OpenCode Go, Codex, Claude, MiniMax, Z.ai, OpenRouter, GitHub Copilot, Moonshot."
+  }
+}

@@ -17,6 +17,14 @@ const REQUEST_TIMEOUT_MS = 12_000;
 const PUBLISH_INTERVAL_MS = 20_000;
 const QUOTAS_PATH = new URL('./quotas.json', import.meta.url);
 
+/**
+ * OpenAI reports the Codex windows as *remaining* quota while every other
+ * provider here reports consumption. 	rue normalises them to consumption
+ * (progressive bars, consistent with the rest of the panel); set it to alse
+ * to show the raw field, which then decreases.
+ */
+const CODEX_WINDOWS_ARE_REMAINING = true;
+
 const OPENCODE_AUTH = () => join(homedir(), '.local', 'share', 'opencode', 'auth.json');
 const DSH_CREDENTIALS = () =>
   process.env.DSH_HOME && process.env.DSH_HOME !== ''
@@ -232,7 +240,7 @@ async function codexQuota(activeKind) {
         // OpenAI reports the Codex windows as *remaining* quota. Every other
         // provider here reports consumption, so invert it once, here, to keep
         // the whole panel progressive (a bar that grows as you use it).
-        usedPct: pct(100 - window.used_percent),
+        usedPct: pct(CODEX_WINDOWS_ARE_REMAINING ? 100 - window.used_percent : window.used_percent),
         resetsAt: toIso(window.reset_at),
       });
     }
@@ -446,6 +454,7 @@ async function minimaxQuota(refs, opencode, activeKind) {
     return Object.assign(entry, { status: 'error', reason: error.message });
   }
 }
+
 
 
 

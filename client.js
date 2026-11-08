@@ -403,8 +403,7 @@ window.__ModuleLoader__.load({
                 ? h('div', { className: 'mqp_header' },
                     h('span', { className: 'mqp_headline' }, provider.label),
                     h('span', { className: 'mqp_percent' }, providerPercent === null ? '—' : providerPercent + ' %'),
-                    h('span', { className: 'mqp_headline' }, 'utilisé'),
-                    h('span', { className: 'mqp_figures' }, providerWindowsList[0]?.label ?? ''))
+                    h('span', { className: 'mqp_headline' }, 'utilisé'))
                 : h('div', { className: 'mqp_section_head' },
                     h('span', null, provider.label),
                     provider.plan ? h('span', { className: 'mqp_section_plan' }, provider.plan) : null,

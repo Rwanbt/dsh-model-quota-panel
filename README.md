@@ -6,7 +6,7 @@ It never invents a number: every value comes from the vendor's own usage endpoin
 
 ## Features
 
-- **Ring + percentage in the composer dock**, immediately to the right of the built-in context meter, using that meter's exact tokens, geometry and typography.
+- **Ring + percentage in the composer dock**, immediately to the right of the built-in context meter, using that meter's exact tokens, geometry and typography. It always describes the **subscription of the model the current conversation uses** — not the profile default — and follows a model switch within a couple of seconds.
 - **Panel on click**, visually identical to the context panel (same `--dsw-*` tokens, 264 px width, segmented bar, swatch legend, anchored above the trigger, Escape / outside click to close).
 - **One card per connected subscription**, active provider first, reset countdowns included.
 - **Silent about noise**: providers without a quota API, or not connected, never appear.
@@ -62,3 +62,4 @@ Nothing else is configurable.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+

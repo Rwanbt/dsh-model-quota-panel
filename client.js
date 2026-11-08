@@ -160,8 +160,50 @@ window.__ModuleLoader__.load({
       return worst;
     }
 
+    /** Provider id used by the quota payload for a model-provider id. */
+    function kindOf(provider) {
+      if (typeof provider !== 'string') return null;
+      if (provider.includes('opencode')) return 'opencode-go';
+      if (provider.includes('claude')) return 'claude';
+      if (provider.includes('codex')) return 'openai-codex';
+      if (provider.includes('minimax')) return 'minimax';
+      if (provider.includes('zai') || provider.includes('z.ai') || provider.includes('glm')) return 'zai';
+      if (provider.includes('copilot')) return 'github-copilot';
+      if (provider.includes('openrouter')) return 'openrouter';
+      if (provider.includes('moonshot') || provider.includes('kimi')) return 'moonshot';
+      return provider;
+    }
+
+    /** Model selection of the Session currently shown in the window. */
+    let selectionValue = null;
+
+    function readSelection(ctx) {
+      try {
+        const raw = globalThis.localStorage ? globalThis.localStorage.getItem('dsh.sessions.current') : null;
+        const sessionId = raw ? JSON.parse(raw).sessionId : null;
+        if (!sessionId) return null;
+        const binding = ctx && ctx.get ? ctx.get('sessions')?.binding?.(sessionId) : null;
+        const face = binding && binding.session && binding.session.projections
+          ? binding.session.projections.faceOf('modelSelection')
+          : null;
+        const snapshot = face && face.getSnapshot ? face.getSnapshot() : null;
+        const value = snapshot && snapshot.next ? snapshot.next : snapshot;
+        if (value && typeof value.provider === 'string') {
+          return { provider: value.provider, model: typeof value.model === 'string' ? value.model : null };
+        }
+      } catch (error) {
+        // best effort: fall back to the Host's own active flag
+      }
+      return null;
+    }
+
     function activeProvider(data) {
       const list = shownProviders(data);
+      if (selectionValue && selectionValue.provider) {
+        const kind = kindOf(selectionValue.provider);
+        const match = list.find((provider) => provider.id === kind);
+        if (match) return match;
+      }
       return list.find((provider) => provider.active) ?? list.find((provider) => worstPercent(provider) !== null) ?? null;
     }
 
@@ -376,6 +418,22 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots'],
       apply(ctx) {
+        // Follow the Session actually shown: the meter must describe the
+        // subscription of the model this conversation uses, not the profile
+        // default (which can point at another provider entirely).
+        let lastKey = '\u0000';
+        const syncSelection = () => {
+          const selection = readSelection(ctx);
+          const key = selection ? `${selection.provider}/${selection.model ?? ''}` : '';
+          if (key === lastKey) return;
+          lastKey = key;
+          selectionValue = selection;
+          patch({});
+        };
+        syncSelection();
+        const selectionPoll = setInterval(syncSelection, 2000);
+        ctx.effect(() => () => clearInterval(selectionPoll), 'model-quota-panel: session selection');
+
         ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
           name: 'conversation.composer.dock',
           id: 'model-quota-meter',

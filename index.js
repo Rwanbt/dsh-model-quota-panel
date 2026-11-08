@@ -229,7 +229,10 @@ async function codexQuota(activeKind) {
       const seconds = window.limit_window_seconds;
       entry.windows.push({
         label: typeof seconds === 'number' && seconds >= 7 * 86400 ? 'Semaine' : fallback,
-        usedPct: pct(window.used_percent),
+        // OpenAI reports the Codex windows as *remaining* quota. Every other
+        // provider here reports consumption, so invert it once, here, to keep
+        // the whole panel progressive (a bar that grows as you use it).
+        usedPct: pct(100 - window.used_percent),
         resetsAt: toIso(window.reset_at),
       });
     }

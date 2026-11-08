@@ -25,20 +25,17 @@ window.__ModuleLoader__.load({
     const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
     /**
      * Absolute path of the snapshot published by the Host (index.js). The Host
-     * injects it into the page for the current install (any OS, any directory);
-     * the literal is only the fallback for an environment that dropped the
-     * injection, and can be edited for a fixed deployment.
+     * injects it into the page for the current install, so no path is hard-coded
+     * here and a clone works from any directory on any OS. Empty means the page
+     * was rendered without the injection (a reload fixes it) — the panel then
+     * says so instead of guessing a path.
      */
-    const INJECTED_QUOTAS_FILE =
+    const QUOTAS_FILE =
       typeof window !== 'undefined' &&
       window.__MODEL_QUOTA_PANEL__ &&
-      typeof window.__MODEL_QUOTA_PANEL__.path === 'string' &&
-      window.__MODEL_QUOTA_PANEL__.path !== ''
+      typeof window.__MODEL_QUOTA_PANEL__.path === 'string'
         ? window.__MODEL_QUOTA_PANEL__.path
-        : null;
-    const QUOTAS_FILE =
-      INJECTED_QUOTAS_FILE ??
-      'C:/Users/barat/Documents/deepseek-harness/default-workspace/model-quota-plugin/quotas.json';
+        : '';
 
     /* ── styles: same values as ui-conversation ContextMeter.module.css ── */
 
@@ -151,6 +148,9 @@ window.__ModuleLoader__.load({
     /* ── data ─────────────────────────────────────────────────────────── */
 
     async function readQuotas() {
+      if (QUOTAS_FILE === '') {
+        throw new Error('chemin du relevé non injecté — recharge la fenêtre (Ctrl+R)');
+      }
       const url = 'api/file?path=' + encodeURIComponent(QUOTAS_FILE) + '&t=' + Date.now();
       const response = await fetch(url);
       if (!response.ok) throw new Error('HTTP ' + response.status);

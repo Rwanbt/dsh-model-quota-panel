@@ -1,5 +1,7 @@
 # dsh-model-quota-panel
 
+![ci](https://github.com/Rwanbt/dsh-model-quota-panel/actions/workflows/ci.yml/badge.svg)
+
 A [DeepSeek Harness](https://www.deepseek.com/en/harness/) plugin that puts **your AI subscription quotas** where you actually write.
 
 It adds a progress ring next to the composer's built-in *context used* meter, and a click-opened panel that is a pixel-level copy of that meter's panel. Every number comes from the vendor's own usage endpoint: no estimate, no placeholder, and a provider with no quota API — or one that is not connected — is simply not displayed.
@@ -119,6 +121,25 @@ Why a file instead of an endpoint: the desktop shell forwards requests to a plug
 | A provider is missing | It has no quota API, its credential is absent, or its endpoint answered with an error (429/401/403) while another provider worked; it returns on its own. |
 | Wrong subscription shown | The conversation's model provider has no matching card, so the panel fell back to the first available one. |
 
+## Tests and CI
+
+The repository ships a deterministic, dependency-free suite (Node's built-in runner): **33 tests**, no network, no fixtures to refresh.
+
+```sh
+npm test        # node --test test/
+npm run check   # node --check on both bundle halves
+```
+
+| File | Covers |
+| --- | --- |
+| `test/config.test.js` | `refs:` block and `llm-pi-ai` provider map parsing, LF and CRLF, quoted values, nested `models:` ignored |
+| `test/providers.test.js` | provider-instance classification (`opencode-go-2`, `anthropic-account`, …), model-provider mapping, card labels |
+| `test/format.test.js` | percentage clamping, timestamp normalisation (seconds / ms / ISO), window labels, visibility rules, active-card selection |
+| `test/map.test.js` | every vendor payload → windows mapping, including Codex consumption semantics, Copilot `percent_remaining`, MiniMax status codes |
+| `test/client.test.js` | the browser bundle loaded in a VM sandbox: module id, slot registrations, absence of embedded paths or credentials |
+| `test/security.test.js` | fails the build on any credential-shaped string, personal absolute path, or tracked runtime artefact |
+
+`.github/workflows/ci.yml` runs that suite on **ubuntu, windows and macos** with **Node 20 and 22**, plus the syntax check. See [SECURITY.md](SECURITY.md) for the security model.
 ## Limitations
 
 - Refresh granularity is 20 s; a window that just reset can take that long to show it.

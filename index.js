@@ -18,12 +18,12 @@ const PUBLISH_INTERVAL_MS = 20_000;
 const QUOTAS_PATH = new URL('./quotas.json', import.meta.url);
 
 /**
- * OpenAI reports the Codex windows as *remaining* quota while every other
- * provider here reports consumption. 	rue normalises them to consumption
- * (progressive bars, consistent with the rest of the panel); set it to alse
- * to show the raw field, which then decreases.
+ * Codex windows: the API field is used_percent and its own flags match that
+ * reading (limit_reached stayed false while the short window sat at 0), so the
+ * consumed percentage is shown directly and every bar grows as you use it.
+ * Set to true only if OpenAI starts reporting the remaining quota instead.
  */
-const CODEX_WINDOWS_ARE_REMAINING = true;
+const CODEX_WINDOWS_ARE_REMAINING = false;
 
 const OPENCODE_AUTH = () => join(homedir(), '.local', 'share', 'opencode', 'auth.json');
 const DSH_CREDENTIALS = () =>

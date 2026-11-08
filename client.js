@@ -7,9 +7,9 @@
  * to the right of the context meter (flex `order`), so the composer reads:
  *   [context used]  [subscription quota]
  *
- * Quota data is published by the Host as `quotas.json`; the page reads it over
- * the built-in `api/file` route, because the desktop shell does not deliver
- * responses from a plugin's own web routes.
+ * Data, prices, translations, FX rates and the session cost are published by the
+ * Host as one snapshot. The page reads it from the plugin-asset route (a plain
+ * relative URL), falling back to the connection Fetch route and then `api/file`.
  */
 
 window.__ModuleLoader__.load({

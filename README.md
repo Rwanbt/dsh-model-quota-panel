@@ -9,7 +9,7 @@
 
 A [DeepSeek Harness](https://www.deepseek.com/en/harness/) plugin that puts **your AI subscription quotas** where you actually write.
 
-It adds a progress ring next to the composer's built-in *context used* meter, and a click-opened panel that is a pixel-level copy of that meter's panel. Every number comes from the vendor's own usage endpoint: no estimate, no placeholder, and a provider with no quota API — or one that is not connected — is simply not displayed.
+It adds a progress ring next to the composer's built-in *context used* meter, and a click-opened panel that is a pixel-level copy of that meter's panel. Every quota comes from the vendor's own usage endpoint — no placeholder — and a provider with no quota API, or one that is not connected, is simply not displayed. The panel also prices the session you are looking at, for pay-per-token users.
 
 ```
 composer dock:   [◔ 15 % context used]   [◔ 15 % subscription quota]
@@ -59,9 +59,19 @@ Prices are a shipped snapshot: edit `PRICES` when a vendor changes its rates.
 
 ## Languages and currencies
 
-The bundle ships five locales (en, fr, es, de, zh), registers them through the harness locale service, and falls back to English for anything missing. Window labels travel from the Host as **semantic keys**, so one payload serves every language; `test/cost.test.js` fails the build when a locale misses a key.
+The bundle ships five locales (en, fr, es, de, zh) and falls back to English for anything missing. Window labels travel from the Host as **semantic keys**, so one payload serves every language; `test/cost.test.js` fails the build when a locale misses a key.
 
-Currencies: USD, EUR, GBP, CHF, CAD, JPY, CNY, AUD, INR, BRL — picked from the browser locale, formatted with `Intl`.
+**The locale is resolved by the Host, not by the page**: `navigator.language` in the desktop shell reports the Electron bundle locale (`en-US`), which forced USD. The Host therefore uses, in order:
+
+1. the plugin config `locale` (and/or `currency`),
+2. the operating system locale via `Intl.DateTimeFormat().resolvedOptions().locale` (e.g. `fr-FR`),
+3. `LC_ALL` / `LC_MESSAGES` / `LANG`,
+4. `en-US`.
+
+The currency is derived from the region of that locale and published alongside it (`locale`, `currency`, `localeSource` in the snapshot).
+
+Currencies: USD, EUR, GBP, CHF, CAD, JPY, CNY, AUD, INR, BRL — formatted with `Intl.NumberFormat`, with four decimals below one unit.
+
 ## Multiple accounts
 
 Provider instances are discovered from the profile's `llm-pi-ai` provider map, so nothing is hard-coded:
@@ -116,7 +126,7 @@ The Host half publishes the snapshot twice:
 1. next to `index.js` as `quotas.json`, and
 2. into `assets/quotas.svg` (JSON bytes, `.svg` name because DSH's plugin-asset route only serves image extensions).
 
-The browser reads it through the **plugin-asset route** — a plain relative URL, `plugins/dsh-model-quota-panel/assets/quotas.svg` — so no filesystem path is involved and nothing has to be edited on any OS. Two fallbacks remain, in order: the absolute path the Host injects into the page at boot (`window.__MODEL_QUOTA_PANEL__.path`, remembered in `localStorage`), then DSH's built-in `api/file` route with that same path.
+The browser reads it through the **plugin-asset route** — a plain relative URL, `plugins/dsh-model-quota-panel/assets/quotas.svg` — so no filesystem path is involved and nothing has to be edited on any OS. Three fallbacks remain, in order: the connection-level Fetch route (`api/model-quota`), then DSH's built-in `api/file` route with the absolute path the Host injects at boot (`window.__MODEL_QUOTA_PANEL__.path`, remembered in `localStorage`).
 
 ## Compatibility
 
@@ -126,7 +136,7 @@ The browser reads it through the **plugin-asset route** — a plain relative URL
 | **Linux** | supported | same code path; credentials follow XDG (`$XDG_DATA_HOME`), `~/.local/share`, `~/.dsh` |
 | **macOS** | supported, untested | also probes `~/Library/Application Support/opencode/auth.json` for the OpenCode CLI |
 
-Nothing in the bundle is OS-specific: the Host uses `node:os`/`node:path`/`node:url` only, and the browser half never hard-codes a filesystem path when the injection is present. Requires DeepSeek Harness 0.2.2-rc.1 (Web or Desktop) and Node.js 20+ (for `fetch` and `AbortSignal.timeout`, both provided by the DSH runtime).
+Nothing in the bundle is OS-specific: the Host uses `node:os`/`node:path`/`node:url` only, and the browser half never hard-codes a filesystem path. Requires DeepSeek Harness 0.2.2-rc.1 (Web or Desktop) and Node.js 20+; the session-cost section additionally needs **Node 22.15+** for zstd, and silently stays hidden below that.
 
 Credentials are read from the same places on every OS: `~/.codex/auth.json`, `~/.claude/.credentials.json`, the OpenCode data directory, and `<DSH_HOME>/.credentials.yaml`.
 
@@ -134,7 +144,7 @@ Credentials are read from the same places on every OS: `~/.codex/auth.json`, `~/
 
 | Part | Role |
 | --- | --- |
-| `index.js` (Host) | Reads the profile provider map, asks each vendor for its usage every 20 s (plus once at start), filters, and writes `quotas.json`. |
+| `index.js` (Host) | Reads the profile provider map, asks each vendor for its usage every 20 s (plus once at start), folds the newest session log into a per-model cost, fetches ECB rates every six hours, and publishes one snapshot: quotas, prices, messages, FX and session cost. |
 | `client.js` (browser) | Registers a meter into `conversation.composer.dock` (the row holding the context meter, `order: 1` puts it on the right) and a panel into `shell.overlay` (the frame-wide floating layer, so the composer can never clip it). |
 | Session awareness | Reads the open session id, then its `modelSelection` projection, and matches the provider instance — exact id first, family second. |
 
@@ -145,7 +155,7 @@ Why not a plain JSON endpoint: the desktop shell forwards requests to a plugin's
 | Symptom | Fix |
 | --- | --- |
 | No ring in the composer | The plugin must be **enabled** in Plugins; then reload the window (`Ctrl+R`). |
-| Ring present, panel empty | `QUOTAS_FILE` does not point at this install, or no provider is connected. |
+| Ring present, panel empty | The snapshot could not be read (reload the window once) or no provider is connected. |
 | A provider is missing | It has no quota API, its credential is absent, or its endpoint answered with an error (429/401/403) while another provider worked; it returns on its own. |
 | Wrong subscription shown | The conversation's model provider has no matching card, so the panel fell back to the first available one. |
 
@@ -169,12 +179,15 @@ npm run check   # node --check on both bundle halves
 | `test/security.test.js` | fails the build on any credential-shaped string, personal absolute path, or tracked runtime artefact |
 
 `.github/workflows/ci.yml` runs that suite on **ubuntu, windows and macos** with **Node 20 and 22**, plus the syntax check. See [SECURITY.md](SECURITY.md) for the security model and [CHANGELOG.md](CHANGELOG.md) for the release history.
+
 ## Limitations
 
 - Refresh granularity is 20 s; a window that just reset can take that long to show it.
 - Rate-limited vendors (HTTP 429) are hidden while another provider answers, and listed with their message when none does.
 - The panel reads the vendor endpoints these CLIs use; those are undocumented and may change without notice.
 - Linux and macOS are untested; credential paths follow each CLI's own home-directory convention.
+- **Session cost** covers the *most recently active* session only, and prices are a shipped snapshot. A vendor that reports cache reads inside `inputTokens` is priced slightly high; a model absent from the table is reported as unpriced rather than guessed.
+- **Session cost needs zstd** (`node:zlib` `zstdDecompressSync`, Node 22.15+). On an older runtime the quota panel works and the cost section stays hidden.
 
 ## License
 
@@ -189,4 +202,6 @@ MIT — see [LICENSE](LICENSE).
 - Tous les quotas sont affichés en **progressif** (consommation) : `0 %` = intact, `100 %` = épuisé. Codex affiche pour sa part le *restant*, d'où l'inversion.
 - **Autant de comptes que tu veux** par fournisseur : chaque entrée `providers` du profil devient une carte.
 - Supportés : OpenCode Go, Codex, Claude (OAuth), MiniMax (coding plan), Z.ai, OpenRouter, GitHub Copilot, Moonshot. Les fournisseurs sans API de quota (Perplexity, Gemini, Mistral, Groq, Cerebras, NVIDIA) ne sont pas affichés.
-- **Aucune configuration** : le Host injecte le chemin absolu de son instantané au démarrage, quel que soit l'OS ou le dossier d'installation. Compatible Windows (testé), Linux et macOS (supporté).
+- **Coût de session** pour les clés API : prix de la session affichée, **découpé par modèle** (un changement de modèle en cours de discussion reste exact), tarifs dans `lib/prices.js`.
+- **Cinq langues** (en, fr, es, de, zh) et montants dans **ta devise**, déduite de la locale du système d'exploitation (`fr-FR` → EUR) et convertie avec les taux BCE. Surchargeable via la config du plugin (`locale`, `currency`).
+- **Aucune configuration** : la page lit l'instantané par une URL relative d'asset, quel que soit l'OS ou le dossier d'installation. Windows testé, Linux et macOS supportés.

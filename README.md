@@ -1,7 +1,7 @@
 # dsh-model-quota-panel
 
 ![ci](https://github.com/Rwanbt/dsh-model-quota-panel/actions/workflows/ci.yml/badge.svg)
-![version](https://img.shields.io/badge/version-1.8.0-blue)
+![version](https://img.shields.io/badge/version-1.8.1-blue)
 ![status](https://img.shields.io/badge/status-stable-success)
 ![license](https://img.shields.io/badge/license-MIT-green)
 

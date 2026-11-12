@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.8.1] — 2026-11-12
+
+### Fixed
+
+- **"Quota data unavailable: HTTP 404" on a fresh install**: the git-ignored `assets/` directory is now created before the snapshot is published, so the plugin-asset route serves it. A failed write is logged instead of being silently ignored.
+
 ### Documentation
 
 - README and SECURITY corrected after the session-cost, locale and transport changes: the locale is resolved by the Host from the operating system (not `navigator.language`), the snapshot is read through the plugin-asset route, session cost is described with its zstd requirement and its per-model folding, and the security page lists the local session log and the ECB rate endpoint.

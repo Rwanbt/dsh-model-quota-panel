@@ -13,7 +13,7 @@
  * quota API, or one that is not connected, is not published at all.
  */
 
-import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import zlib from 'node:zlib';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -154,7 +154,12 @@ export function apply(ctx, config) {
       // Also publish through the plugin-asset route: a plain relative URL the
       // page can fetch without knowing any filesystem path. The route only
       // serves image extensions, hence the .svg name.
-      await writeFile(ASSET_PATH, serialised, 'utf8').catch(() => {});
+      // `assets/` is git-ignored, so a fresh clone does not have it: create it,
+      // otherwise the plugin-asset route answers 404 and the panel shows
+      // "Quota data unavailable".
+      await mkdir(new URL('./assets/', import.meta.url), { recursive: true })
+        .then(() => writeFile(ASSET_PATH, serialised, 'utf8'))
+        .catch((error) => console.warn('[model-quota-panel] could not publish the asset snapshot:', error?.message));
     } catch (error) {
       console.warn('[model-quota-panel] could not publish quotas.json:', error?.message);
     }

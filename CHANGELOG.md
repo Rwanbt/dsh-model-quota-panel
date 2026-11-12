@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-11-12
+
+### Added
+
+- **Stored OAuth grants**: the Codex card now reads the `llm-pi-ai/openai-codex` grant from the DSH credential store and keeps whichever token (stored grant or `~/.codex/auth.json`) expires later, because pi-ai refreshes the stored grant and the CLI file can go stale. The Anthropic card falls back to a stored `llm-pi-ai/anthropic` grant when the profile names no `apiKeyEnv`, so a Settings → Models sign-in is visible without the CLI.
+
+### Fixed
+
+- A Codex connection imported by the Anthropic-account plugin is now visible in the quota panel even when `~/.codex/auth.json` is missing or outdated.
+
 ## [1.8.1] — 2026-11-12
 
 ### Fixed

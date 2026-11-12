@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { parseProvidersPatch, parseRefs } from '../lib/config.js';
+import { parseProvidersPatch, parseRecords, parseRefs } from '../lib/config.js';
 
 const LF = `version: 1
 refs:
@@ -11,6 +11,41 @@ refs:
 `;
 
 const CRLF = LF.replace(/\n/g, '\r\n');
+
+const CREDENTIALS = `${LF}records:
+  llm-pi-ai/openai-codex:
+    kind: grant
+    payload:
+      type: oauth
+      access: eyJ.header.signature
+      refresh: rt.1.abc
+      expires: 1795353454000
+      accountId: 1589d1ca-4a94-4881-a29d-6fbb9863e878
+  deepseek-account-platform/default:
+    kind: grant
+    payload:
+      token: abc
+other:
+  x: 1
+`;
+
+test('parseRecords reads grant payload scalars and stops at the next block', () => {
+  const records = parseRecords(CREDENTIALS);
+  assert.deepEqual(Object.keys(records), ['llm-pi-ai/openai-codex', 'deepseek-account-platform/default']);
+  assert.equal(records['llm-pi-ai/openai-codex'].kind, 'grant');
+  assert.equal(records['llm-pi-ai/openai-codex'].payload.access, 'eyJ.header.signature');
+  assert.equal(records['llm-pi-ai/openai-codex'].payload.expires, '1795353454000');
+  assert.equal(records['llm-pi-ai/openai-codex'].payload.accountId, '1589d1ca-4a94-4881-a29d-6fbb9863e878');
+  assert.equal(records['deepseek-account-platform/default'].payload.token, 'abc');
+  assert.deepEqual(parseRecords(CREDENTIALS.replace(/\n/g, '\r\n')), records);
+  assert.deepEqual(parseRecords('version: 1\nrefs:\n  A: a\n'), {});
+  assert.deepEqual(parseRecords(null), {});
+});
+
+test('parseRecords keeps quoted scalars intact', () => {
+  const records = parseRecords('records:\n  key:\n    payload:\n      token: "quoted value"\n');
+  assert.equal(records.key.payload.token, 'quoted value');
+});
 
 test('parseRefs reads flat refs with LF and CRLF endings', () => {
   assert.deepEqual(parseRefs(LF), {

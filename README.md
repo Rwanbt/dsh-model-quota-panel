@@ -96,7 +96,7 @@ Each entry becomes its own card, named after its `displayName`. The meter and th
 | Provider | Endpoint used | Credential |
 | --- | --- | --- |
 | **OpenCode Go** | `https://opencode.ai/inference/go/v1/usage` | `OPENCODE_GO_API_KEY` (profile `apiKeyEnv`), DSH store, env, or OpenCode store |
-| **Codex (ChatGPT)** | `https://chatgpt.com/backend-api/wham/usage` | `~/.codex/auth.json` (`codex login`) |
+| **Codex (ChatGPT)** | `https://chatgpt.com/backend-api/wham/usage` | the freshest of the `llm-pi-ai/openai-codex` grant in the DSH credential store and `~/.codex/auth.json` (`codex login`); pi-ai owns and refreshes the stored grant, so it wins once its expiry is later |
 | **Claude (OAuth account)** | `https://api.anthropic.com/api/oauth/usage` | profile `apiKeyEnv` holding an `sk-ant-oat…` token, or `~/.claude/.credentials.json` |
 | **Anthropic CLI account** | same endpoint | `~/.claude/.credentials.json` (`claude` then `/login`) |
 | **MiniMax** | `https://api.minimax.io/v1/coding_plan/remains` | `apiKeyEnv` / `MINIMAX_API_KEY` (needs an active coding plan) |
@@ -107,7 +107,7 @@ Each entry becomes its own card, named after its `displayName`. The meter and th
 
 Providers with **no public quota endpoint** are never displayed: Perplexity, Google / Gemini API keys, Mistral, Groq, Cerebras, NVIDIA, and MiniMax API keys (only MiniMax *coding plans* expose a quota).
 
-Keys are resolved from, in order: the profile's `apiKeyEnv` in the DSH credential store (`<DSH_HOME>/.credentials.yaml`, `refs:` block), the process environment, then the OpenCode CLI store (`~/.local/share/opencode/auth.json`). A key is only ever sent to that vendor's own API.
+Keys are resolved from, in order: the profile's `apiKeyEnv` in the DSH credential store (`<DSH_HOME>/.credentials.yaml`, `refs:` block), the process environment, then the OpenCode CLI store (`~/.local/share/opencode/auth.json`). OAuth grants pi-ai signs in itself live in the same file's `records:` block and are used for Codex and Anthropic when no `refs:` entry exists, so a connection made from Settings → Models appears here without a separate CLI login. A key is only ever sent to that vendor's own API.
 
 ## Install
 

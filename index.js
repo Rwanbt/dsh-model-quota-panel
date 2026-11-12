@@ -19,7 +19,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { parseProvidersPatch, parseRefs } from './lib/config.js';
+import { parseProvidersPatch, parseRecords, parseRefs } from './lib/config.js';
 import { MESSAGES } from './lib/i18n.js';
 import { PRICES, currencyForLocale, SUPPORTED_CURRENCIES } from './lib/prices.js';
 import { foldSessionCost } from './lib/session-cost.js';
@@ -348,11 +348,12 @@ async function fxRates() {
 /* ── collection ───────────────────────────────────────────────────────── */
 
 async function collect(ctx, agentDefaultModel, preferences = displayPreferences(null)) {
-  const [refs, opencodeStore, configured] = await Promise.all([
-    dshRefs(),
+  const [credentials, opencodeStore, configured] = await Promise.all([
+    dshCredentials(),
     opencodeAuth(),
     providerInstances(ctx),
   ]);
+  const { refs, records } = credentials;
   const active = readActiveSelection(agentDefaultModel);
   const activeKind = kindOfModelProvider(active.provider);
 
@@ -362,7 +363,7 @@ async function collect(ctx, agentDefaultModel, preferences = displayPreferences(
       .filter((instance) => instance.kind !== null),
   );
 
-  const state = { refs, opencodeStore, exact: false, activeKind };
+  const state = { refs, records, opencodeStore, exact: false, activeKind };
   const entries = [];
   for (const instance of instances) {
     const entry = await describeInstance(instance, { ...state, exact: active.provider === instance.id });
@@ -371,7 +372,7 @@ async function collect(ctx, agentDefaultModel, preferences = displayPreferences(
 
   // Credentials that live in the vendor CLI rather than the profile.
   if (!instances.some((instance) => instance.kind === 'openai-codex')) {
-    const entry = await codexCliQuota(active, activeKind);
+    const entry = await codexCliQuota(active, activeKind, state);
     if (entry) entries.push(entry);
   }
   if (!instances.some((instance) => instance.kind === 'anthropic')) {
@@ -541,12 +542,69 @@ function applyMapping(entry, mapping) {
 
 /* ── credentials ──────────────────────────────────────────────────────── */
 
-async function dshRefs() {
+/**
+ * Read both key spaces of the credential plane: reference values (`refs:`)
+ * and stored OAuth grants (`records:`).
+ * @returns {Promise<{refs: Record<string, string>, records: Record<string, {kind?: string, payload: Record<string, string>}>}>}
+ */
+async function dshCredentials() {
   try {
-    return parseRefs(await readFile(DSH_CREDENTIALS(), 'utf8'));
+    const text = await readFile(DSH_CREDENTIALS(), 'utf8');
+    return { refs: parseRefs(text), records: parseRecords(text) };
   } catch {
-    return {};
+    return { refs: {}, records: {} };
   }
+}
+
+/** One `kind: grant` OAuth payload from the credential plane, when present. */
+function recordGrant(records, key) {
+  const record = records?.[key];
+  const payload = record?.kind === 'grant' ? record.payload : undefined;
+  return payload && typeof payload.access === 'string' && payload.access !== '' ? payload : undefined;
+}
+
+/** Absolute expiry of a JWT access token, in milliseconds (0 when unreadable). */
+function jwtExpiry(token) {
+  if (typeof token !== 'string') return 0;
+  try {
+    const payload = token.split('.')[1];
+    if (payload === undefined) return 0;
+    const json = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    const exp = Number(json?.exp);
+    return Number.isFinite(exp) && exp > 0 ? exp * 1000 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * The freshest Codex credential available: the grant pi-ai refreshes in the
+ * credential plane, or the one the Codex CLI wrote. pi-ai owns the stored grant
+ * after the first import and rotates its refresh token, so the CLI file can go
+ * stale — the later expiry wins, with the stored grant preferred on a tie.
+ * @returns {Promise<{token: string, accountId?: string, expiresAt: number} | null>}
+ */
+async function codexCredential(state) {
+  const auth = await readJsonFile(join(homedir(), '.codex', 'auth.json'));
+  const fileToken = auth?.tokens?.access_token;
+  const fileExpiry = jwtExpiry(fileToken);
+  const record = recordGrant(state?.records, 'llm-pi-ai/openai-codex');
+  const recordExpiry = Number(record?.expires) || 0;
+
+  const fileUsable = typeof fileToken === 'string' && fileToken !== '';
+  const recordUsable = record !== undefined;
+  if (!fileUsable && !recordUsable) return null;
+
+  const useRecord = recordUsable && (!fileUsable || recordExpiry >= fileExpiry);
+  const token = useRecord ? record.access : fileToken;
+  const accountId = useRecord
+    ? record.accountId ?? auth?.tokens?.account_id
+    : auth?.tokens?.account_id ?? record?.accountId;
+  return {
+    token,
+    ...(typeof accountId === 'string' && accountId !== '' ? { accountId } : {}),
+    expiresAt: useRecord ? recordExpiry : fileExpiry,
+  };
 }
 
 async function opencodeAuth() {
@@ -613,7 +671,11 @@ async function opencodeQuota(instance, state) {
 }
 
 async function anthropicQuota(instance, state) {
-  const key = credentialFor(instance, state) ?? state.opencodeStore?.anthropic?.key ?? null;
+  const key =
+    credentialFor(instance, state) ??
+    recordGrant(state.records, 'llm-pi-ai/anthropic')?.access ??
+    state.opencodeStore?.anthropic?.key ??
+    null;
   if (!key) return null;
   const entry = entryBase(instance, state);
   try {
@@ -633,25 +695,23 @@ async function anthropicQuota(instance, state) {
 
 async function codexConfiguredQuota(instance, state) {
   const entry = entryBase(instance, state);
-  const auth = await readJsonFile(join(homedir(), '.codex', 'auth.json'));
-  const token = auth?.tokens?.access_token;
-  if (typeof token !== 'string' || token === '') {
+  const credential = await codexCredential(state);
+  if (credential === null) {
     return Object.assign(entry, { status: 'unavailable', reason: 'Connexion Codex absente (lance `codex login`)' });
   }
-  return codexUsage(entry, auth, token);
+  return codexUsage(entry, credential);
 }
 
-async function codexCliQuota(active, activeKind) {
-  const auth = await readJsonFile(join(homedir(), '.codex', 'auth.json'));
-  const token = auth?.tokens?.access_token;
-  if (typeof token !== 'string' || token === '') return null;
-  return codexUsage(cliEntry('openai-codex', 'openai-codex', KIND_LABEL['openai-codex'], active, activeKind), auth, token);
+async function codexCliQuota(active, activeKind, state) {
+  const credential = await codexCredential(state);
+  if (credential === null) return null;
+  return codexUsage(cliEntry('openai-codex', 'openai-codex', KIND_LABEL['openai-codex'], active, activeKind), credential);
 }
 
-async function codexUsage(entry, auth, token) {
+async function codexUsage(entry, credential) {
   try {
-    const headers = { authorization: `Bearer ${token}` };
-    if (typeof auth?.tokens?.account_id === 'string') headers['chatgpt-account-id'] = auth.tokens.account_id;
+    const headers = { authorization: `Bearer ${credential.token}` };
+    if (typeof credential.accountId === 'string') headers['chatgpt-account-id'] = credential.accountId;
     const payload = await getJson('https://chatgpt.com/backend-api/wham/usage', headers);
     return applyMapping(entry, mapCodexUsage(payload));
   } catch (error) {
